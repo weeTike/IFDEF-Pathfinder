@@ -68,16 +68,11 @@ export class IfdefDecorationProvider {
     }
 
     private parseDirectives(document: vscode.TextDocument): ParsedDirective[] {
-        const pattern = /#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
+        const pattern = /^[ \t]*#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
         const directives: ParsedDirective[] = [];
 
         for (const match of document.getText().matchAll(pattern)) {
             const line = document.positionAt(match.index).line;
-            const lineText = document.lineAt(line).text.trim();
-            if (lineText.startsWith('//') || lineText.startsWith('/*')) {
-                continue;
-            }
-
             const type = match[1] ?? '';
             let name = (match[2] ?? '').trim().split('//')[0]?.trim() ?? '';
 
