@@ -70,14 +70,19 @@
   "scripts": {
     "vscode:prepublish": "npm run compile",
     "compile": "tsc -p ./",
-    "watch": "tsc -watch -p ./"
+    "watch": "tsc -watch -p ./",
+    "lint": "eslint src syntaxes"
   },
   "devDependencies": {
+    "@stylistic/eslint-plugin": "^5.10.0",
     "@types/mocha": "^10.0.10",
     "@types/node": "^26.6.6",
     "@types/vscode": "^1.60.0",
+    "@typescript-eslint/eslint-plugin": "^8.72.1",
+    "@typescript-eslint/parser": "^8.72.1",
     "@vscode/test-electron": "^3.1.0",
-    "typescript": "^7.0.2"
+    "eslint": "^10.14.0",
+    "typescript": "^6.0.3"
   },
   "repository": {
     "type": "git",

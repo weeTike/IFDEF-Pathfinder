@@ -21,7 +21,7 @@ export class IfdefDecorationProvider {
             after: {
                 color: 'inherit',
                 fontStyle: 'italic',
-                contentText: '', 
+                contentText: '',
             }
         });
 
@@ -30,14 +30,31 @@ export class IfdefDecorationProvider {
         this.statusBarItem.text = 'IFDEF Path: <None>';
 
         // Register the event listener for cursor movement
-        vscode.window.onDidChangeTextEditorSelection(this.onDidChangeTextEditorSelection, this);
+        vscode.window.onDidChangeTextEditorSelection(event => this.onDidChangeTextEditorSelection(event));
     }
 
     getColor(level: number): string {
         const colors = [
             'blue', 'green', 'red', 'orange', 'purple', 'cyan', 'magenta', 'brown', 'lime', 'pink'
-        ];
-        return colors[level % colors.length];
+        ] as const;
+
+        return colors[level % colors.length] ?? colors[0];
+    }
+
+    private pushDecoration(
+        decorations: vscode.DecorationOptions[][],
+        level: number,
+        decoration: vscode.DecorationOptions
+    ) {
+        const bucket = decorations[level];
+        if (bucket) {
+            bucket.push(decoration);
+        } else {
+            log(
+                DebugModule.Decorations,
+                `Warning: nesting level ${level} exceeds supported depth (${decorations.length}); decoration skipped`
+            );
+        }
     }
 
     onDidChangeTextEditorSelection(event: vscode.TextEditorSelectionChangeEvent) {
@@ -52,11 +69,10 @@ export class IfdefDecorationProvider {
         const stack: { line: number, type: string, name: string, level: number }[] = [];
         const elseifStack: { name: string, type: string }[] = [];
         const decorations: vscode.DecorationOptions[][] = Array.from({ length: 10 }, () => []);
-        let cursorDecoration: vscode.DecorationOptions[] = [];
-    
+
         // Get the current cursor position
         const cursorPosition = editor.selection.active;
-    
+
         // Check if the cursor line has changed
         if (this.previousCursorLine !== cursorPosition.line) {
             log(DebugModule.Decorations, `Prev: ${this.previousCursorLine}; New: ${cursorPosition.line}`);
@@ -66,21 +82,27 @@ export class IfdefDecorationProvider {
             editor.setDecorations(this.cursorDecorationType, []);
             return;
         }
-    
-        log(DebugModule.Decorations, `Cursor position: Line ${cursorPosition.line}, Character ${cursorPosition.character}`);
-    
-        let activePath: string[] = []; // Initialize as an empty array
-    
+
+        log(
+            DebugModule.Decorations,
+            `Cursor position: Line ${cursorPosition.line}, Character ${cursorPosition.character}`
+        );
+
+        const activePath: string[] = []; // Initialize as an empty array
+
         for (const match of matches) {
-            const line = editor.document.positionAt(match.index!).line;
+            const line = editor.document.positionAt(match.index).line;
             const type = match[1];
-            let name = match[2].trim().split('//')[0].trim(); // Ignore anything after //
-    
+            let name = (match[2] ?? '').trim().split('//')[0]?.trim() ?? ''; // Ignore anything after //
+
             // Ignore lines that are fully commented out
-            if (editor.document.lineAt(line).text.trim().startsWith('//') || editor.document.lineAt(line).text.trim().startsWith('/*')) {
+            if (
+                editor.document.lineAt(line).text.trim().startsWith('//') ||
+                editor.document.lineAt(line).text.trim().startsWith('/*')
+            ) {
                 continue;
             }
-    
+
             // Handle defined(...) and !defined(...) cases
             if (name.startsWith('defined(') || name.startsWith('!defined(')) {
                 name = name.replace(/^!?defined\((.*?)\)/, '$1');
@@ -88,15 +110,15 @@ export class IfdefDecorationProvider {
                     name = `!${name.substring(1)}`;
                 }
             }
-    
+
             // Handle #if !(...)
             if (name.startsWith('!(')) {
                 name = `!${name.substring(2, name.length - 1)}`;
             }
-    
+
             // Remove double exclamation marks
             name = name.replace(/!!/g, '');
-    
+
             if (type === 'ifdef' || type === 'ifndef' || type === 'if') {
                 const level = stack.length;
                 const isNegated = type === 'ifndef' || name.startsWith('!');
@@ -105,7 +127,12 @@ export class IfdefDecorationProvider {
                 elseifStack.push({ name: displayName, type: type }); // Push into elseifStack
                 const fullPath = stack.map(item => item.name).join('->');
                 log(DebugModule.Decorations, `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`);
-                const range = new vscode.Range(line, editor.document.lineAt(line).text.length, line, editor.document.lineAt(line).text.length);
+                const range = new vscode.Range(
+                    line,
+                    editor.document.lineAt(line).text.length,
+                    line,
+                    editor.document.lineAt(line).text.length
+                );
                 const decoration = {
                     range,
                     renderOptions: {
@@ -116,22 +143,34 @@ export class IfdefDecorationProvider {
                         }
                     }
                 };
-                decorations[level].push(decoration);
+                this.pushDecoration(decorations, level, decoration);
                 if (line <= cursorPosition.line) {
                     activePath.push(displayName);
                 }
             } else if (type === 'elseif' || type === 'elif') {
                 const lastItem = stack[stack.length - 1];
+                if (!lastItem) {
+                    log(
+                        DebugModule.Decorations,
+                        `Warning: #${type} found without matching opening directive at line ${line}`
+                    );
+                    continue;
+                }
                 const level = lastItem.level;
                 const displayName = name;
                 elseifStack.push({ name: displayName, type: type });
-                
+
                 // Replace the last item in the stack
                 stack[stack.length - 1] = { line: line, type: type, name: displayName, level: level };
-                
+
                 const fullPath = stack.map(item => item.name).join('->');
                 log(DebugModule.Decorations, `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`);
-                const range = new vscode.Range(line, editor.document.lineAt(line).text.length, line, editor.document.lineAt(line).text.length);
+                const range = new vscode.Range(
+                    line,
+                    editor.document.lineAt(line).text.length,
+                    line,
+                    editor.document.lineAt(line).text.length
+                );
                 const decoration = {
                     range,
                     renderOptions: {
@@ -142,7 +181,7 @@ export class IfdefDecorationProvider {
                         }
                     }
                 };
-                decorations[level].push(decoration);
+                this.pushDecoration(decorations, level, decoration);
                 if (line <= cursorPosition.line) {
                     activePath[activePath.length - 1] = displayName;
                 }
@@ -153,8 +192,16 @@ export class IfdefDecorationProvider {
                     const level = start.level;
                     const negatedOwner = owner.startsWith('!') ? owner.substring(1) : `!${owner}`;
                     const fullPath = stack.map(item => item.name).join('->');
-                    log(DebugModule.Decorations, `Found #else: ${negatedOwner} at line ${line}, full path: ${fullPath}`);
-                    const range = new vscode.Range(line, editor.document.lineAt(line).text.length, line, editor.document.lineAt(line).text.length);
+                    log(
+                        DebugModule.Decorations,
+                        `Found #else: ${negatedOwner} at line ${line}, full path: ${fullPath}`
+                    );
+                    const range = new vscode.Range(
+                        line,
+                        editor.document.lineAt(line).text.length,
+                        line,
+                        editor.document.lineAt(line).text.length
+                    );
                     const decoration = {
                         range,
                         renderOptions: {
@@ -165,7 +212,7 @@ export class IfdefDecorationProvider {
                             }
                         }
                     };
-                    decorations[level].push(decoration);
+                    this.pushDecoration(decorations, level, decoration);
                     if (line <= cursorPosition.line) {
                         activePath[activePath.length - 1] = negatedOwner;
                     }
@@ -177,17 +224,34 @@ export class IfdefDecorationProvider {
                     const level = start.level;
                     const fullPath = stack.map(item => item.name).concat(owner).join('->');
                     let combinedPath = '';
-                    log(DebugModule.Decorations, `elseifStack before processing #endif: ${JSON.stringify(elseifStack)}`);
+                    log(
+                        DebugModule.Decorations,
+                        `elseifStack before processing #endif: ${JSON.stringify(elseifStack)}`
+                    );
                     log(DebugModule.Decorations, `stack before processing #endif: ${JSON.stringify(stack)}`);
                     while (elseifStack.length > 0) {
+                        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                         const elseifOwner = elseifStack.pop()!;
                         combinedPath = combinedPath ? `${elseifOwner.name} & ${combinedPath}` : elseifOwner.name;
-                        if (elseifStack.length === 0 || elseifOwner.type === 'ifdef' || elseifOwner.type === 'ifndef' || elseifOwner.type === 'if') {
+                        if (
+                            elseifStack.length === 0 ||
+                            elseifOwner.type === 'ifdef' ||
+                            elseifOwner.type === 'ifndef' ||
+                            elseifOwner.type === 'if'
+                        ) {
                             break; // Stop when reaching the first ifdef/ifndef/if
                         }
                     }
-                    log(DebugModule.Decorations, `Found #endif: ${combinedPath} at line ${line}, full path: ${fullPath}`);
-                    const range = new vscode.Range(line, editor.document.lineAt(line).text.length, line, editor.document.lineAt(line).text.length);
+                    log(
+                        DebugModule.Decorations,
+                        `Found #endif: ${combinedPath} at line ${line}, full path: ${fullPath}`
+                    );
+                    const range = new vscode.Range(
+                        line,
+                        editor.document.lineAt(line).text.length,
+                        line,
+                        editor.document.lineAt(line).text.length
+                    );
                     const decoration = {
                         range,
                         renderOptions: {
@@ -198,19 +262,21 @@ export class IfdefDecorationProvider {
                             }
                         }
                     };
-                    decorations[level].push(decoration);
+                    this.pushDecoration(decorations, level, decoration);
                     if (line < cursorPosition.line) {
                         activePath.pop();
                     }
                 }
             }
         }
-    
+
         // Apply decorations to the editor using decoration types
         decorations.forEach((decoration, level) => {
-            editor.setDecorations(this.decorationTypes[level], decoration);
+            if (this.decorationTypes[level]) {
+                editor.setDecorations(this.decorationTypes[level], decoration);
+            }
         });
-    
+
         // Update status bar with cursor path
         const fullPath = activePath.length > 0 ? activePath.join('->') : '<None>';
         log(DebugModule.Decorations, `IFDEF Path, activePath: ${activePath}, full path: ${fullPath}`);

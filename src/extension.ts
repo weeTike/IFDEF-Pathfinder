@@ -26,7 +26,7 @@ export function activate(context: vscode.ExtensionContext) {
         }),
         vscode.workspace.onDidChangeTextDocument(event => {
             const editor = vscode.window.activeTextEditor;
-            if (editor && event.document === editor.document) {
+            if (event.document === editor?.document) {
                 decorationProvider.updateDecorations(editor);
             }
         }),
@@ -53,7 +53,8 @@ export function activate(context: vscode.ExtensionContext) {
             const { startLine, endLine } = findIfdefSection(editor, line);
             if (startLine !== undefined && endLine !== undefined) {
                 const range = new vscode.Range(startLine, 0, endLine, editor.document.lineAt(endLine).text.length);
-                editor.selection = new vscode.Selection(startLine, 0, endLine, editor.document.lineAt(endLine).text.length);
+                editor.selection =
+                    new vscode.Selection(startLine, 0, endLine, editor.document.lineAt(endLine).text.length);
                 editor.revealRange(range);
                 vscode.commands.executeCommand('editor.fold');
             }
@@ -100,5 +101,3 @@ function findIfdefSection(editor: vscode.TextEditor, line: number): { startLine?
 
     return { startLine, endLine };
 }
-
-export function deactivate() {}
