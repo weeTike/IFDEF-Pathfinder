@@ -7,9 +7,6 @@ export function activate(context: vscode.ExtensionContext) {
     // Start the extension logger
     context.subscriptions.push(getLogger());
 
-    // Disable default C/C++ folding for preprocessor directives
-    vscode.workspace.getConfiguration('C_Cpp').update('foldingRange', false, vscode.ConfigurationTarget.Global);
-
     // Register our custom folding provider with higher priority
     const ifdefFoldingProvider = new IfdefFoldingProvider();
     context.subscriptions.push(
