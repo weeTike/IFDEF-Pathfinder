@@ -2,12 +2,32 @@ import * as vscode from 'vscode';
 import * as log from './log';
 import { DebugModule } from './log';
 
+interface ParsedDirective {
+    line: number;
+    type: string;
+    name: string;
+}
+
+interface DirectiveLabel {
+    line: number;
+    label: string;
+    level: number;
+}
+
+interface WalkResult {
+    labels: DirectiveLabel[];
+    activePath: string[];
+}
+
+const renderDebounceMs = 150;
+
 export class IfdefDecorationProvider {
 
     private decorationTypes: vscode.TextEditorDecorationType[] = [];
     private cursorDecorationType: vscode.TextEditorDecorationType;
     private statusBarItem: vscode.StatusBarItem;
     private previousCursorLine: number | undefined;
+    private pendingRenders = new Map<string, ReturnType<typeof setTimeout>>();
 
     constructor() {
         // Initialize decoration types with different colors
@@ -30,8 +50,12 @@ export class IfdefDecorationProvider {
         this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
         this.statusBarItem.text = 'IFDEF Path: <None>';
 
-        // Register the event listener for cursor movement
-        vscode.window.onDidChangeTextEditorSelection(event => this.onDidChangeTextEditorSelection(event));
+        // Register the event listener, ignoring selection changes in editors other than the active one
+        vscode.window.onDidChangeTextEditorSelection(event => {
+            if (event.textEditor === vscode.window.activeTextEditor) {
+                this.updateActivePath(event.textEditor);
+            }
+        });
     }
 
     getColor(level: number): string {
@@ -40,6 +64,56 @@ export class IfdefDecorationProvider {
         ] as const;
 
         return colors[level % colors.length] ?? colors[0];
+    }
+
+    private parseDirectives(document: vscode.TextDocument): ParsedDirective[] {
+        const pattern = /#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
+        const directives: ParsedDirective[] = [];
+
+        for (const match of document.getText().matchAll(pattern)) {
+            const line = document.positionAt(match.index).line;
+            const lineText = document.lineAt(line).text.trim();
+            if (lineText.startsWith('//') || lineText.startsWith('/*')) {
+                continue;
+            }
+
+            const type = match[1] ?? '';
+            let name = (match[2] ?? '').trim().split('//')[0]?.trim() ?? '';
+
+            if (name.startsWith('defined(') || name.startsWith('!defined(')) {
+                name = name.replace(/^!?defined\((.*?)\)/, '$1');
+                if (name.startsWith('!')) {
+                    name = `!${name.substring(1)}`;
+                }
+            }
+            if (name.startsWith('!(')) {
+                name = `!${name.substring(2, name.length - 1)}`;
+            }
+            name = name.replace(/!!/g, '');
+
+            directives.push({ line, type, name });
+        }
+
+        return directives;
+    }
+
+    private buildDecoration(
+        editor: vscode.TextEditor,
+        line: number,
+        label: string,
+        level: number
+    ): vscode.DecorationOptions {
+        const endOfLine = editor.document.lineAt(line).text.length;
+        return {
+            range: new vscode.Range(line, endOfLine, line, endOfLine),
+            renderOptions: {
+                after: {
+                    contentText: ` <-- ${label}`,
+                    color: this.getColor(level),
+                    fontStyle: 'italic'
+                }
+            }
+        };
     }
 
     private pushDecoration(
@@ -58,99 +132,27 @@ export class IfdefDecorationProvider {
         }
     }
 
-    onDidChangeTextEditorSelection(event: vscode.TextEditorSelectionChangeEvent) {
-        const editor = event.textEditor;
-        this.updateDecorations(editor);
-    }
+    private walkDirectives(directives: ParsedDirective[], cursorLine: number): WalkResult {
+        const stack: { opener: string; current: string; type: string; level: number }[] = [];
+        const elseifStack: { name: string; type: string }[] = [];
+        const labels: DirectiveLabel[] = [];
+        let activePath: string[] = [];
 
-    updateDecorations(editor: vscode.TextEditor) {
-        const pattern = /#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
-        const text = editor.document.getText();
-        const matches = [...text.matchAll(pattern)];
-        const stack: { line: number, type: string, name: string, level: number }[] = [];
-        const elseifStack: { name: string, type: string }[] = [];
-        const decorations: vscode.DecorationOptions[][] = Array.from({ length: 10 }, () => []);
-
-        // Get the current cursor position
-        const cursorPosition = editor.selection.active;
-
-        // Check if the cursor line has changed
-        if (this.previousCursorLine !== cursorPosition.line) {
-            log.debug(DebugModule.Decorations, `Prev: ${this.previousCursorLine}; New: ${cursorPosition.line}`);
-            this.previousCursorLine = cursorPosition.line;
-        } else {
-            // Clear previous cursor decorations if the cursor line hasn't changed
-            editor.setDecorations(this.cursorDecorationType, []);
-            return;
-        }
-
-        log.trace(
-            DebugModule.Decorations,
-            `Cursor position: Line ${cursorPosition.line}, Character ${cursorPosition.character}`
-        );
-
-        const activePath: string[] = []; // Initialize as an empty array
-
-        for (const match of matches) {
-            const line = editor.document.positionAt(match.index).line;
-            const type = match[1];
-            let name = (match[2] ?? '').trim().split('//')[0]?.trim() ?? ''; // Ignore anything after //
-
-            // Ignore lines that are fully commented out
-            if (
-                editor.document.lineAt(line).text.trim().startsWith('//') ||
-                editor.document.lineAt(line).text.trim().startsWith('/*')
-            ) {
-                continue;
-            }
-
-            // Handle defined(...) and !defined(...) cases
-            if (name.startsWith('defined(') || name.startsWith('!defined(')) {
-                name = name.replace(/^!?defined\((.*?)\)/, '$1');
-                if (name.startsWith('!')) {
-                    name = `!${name.substring(1)}`;
-                }
-            }
-
-            // Handle #if !(...)
-            if (name.startsWith('!(')) {
-                name = `!${name.substring(2, name.length - 1)}`;
-            }
-
-            // Remove double exclamation marks
-            name = name.replace(/!!/g, '');
+        for (const { line, type, name } of directives) {
+            // An #endif on the cursor line still leaves the cursor inside the block it closes
+            const reachedByCursor = type === 'endif' ? line < cursorLine : line <= cursorLine;
 
             if (type === 'ifdef' || type === 'ifndef' || type === 'if') {
                 const level = stack.length;
                 const isNegated = type === 'ifndef' || name.startsWith('!');
                 const displayName = isNegated ? `!${name.replace(/^!/, '')}` : name;
-                stack.push({ line: line, type: type, name: displayName, level: level });
-                elseifStack.push({ name: displayName, type: type }); // Push into elseifStack
-                const fullPath = stack.map(item => item.name).join('->');
+                stack.push({ opener: displayName, current: displayName, type, level });
+                elseifStack.push({ name: displayName, type });
+                labels.push({ line, label: displayName, level });
                 log.trace(
                     DebugModule.Decorations,
-                    `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`
+                    `Found #${type}: ${displayName} at line ${line}, full path: ${this.pathOf(stack)}`
                 );
-                const range = new vscode.Range(
-                    line,
-                    editor.document.lineAt(line).text.length,
-                    line,
-                    editor.document.lineAt(line).text.length
-                );
-                const decoration = {
-                    range,
-                    renderOptions: {
-                        after: {
-                            contentText: ` <-- ${displayName}`,
-                            color: this.getColor(level),
-                            fontStyle: 'italic'
-                        }
-                    }
-                };
-                this.pushDecoration(decorations, level, decoration);
-                if (line <= cursorPosition.line) {
-                    activePath.push(displayName);
-                }
             } else if (type === 'elseif' || type === 'elif') {
                 const lastItem = stack[stack.length - 1];
                 if (!lastItem) {
@@ -160,141 +162,142 @@ export class IfdefDecorationProvider {
                     );
                     continue;
                 }
-                const level = lastItem.level;
-                const displayName = name;
-                elseifStack.push({ name: displayName, type: type });
-
-                // Replace the last item in the stack
-                stack[stack.length - 1] = { line: line, type: type, name: displayName, level: level };
-
-                const fullPath = stack.map(item => item.name).join('->');
+                lastItem.current = name;
+                lastItem.type = type;
+                elseifStack.push({ name, type });
+                labels.push({ line, label: name, level: lastItem.level });
                 log.trace(
                     DebugModule.Decorations,
-                    `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`
+                    `Found #${type}: ${name} at line ${line}, full path: ${this.pathOf(stack)}`
                 );
-                const range = new vscode.Range(
-                    line,
-                    editor.document.lineAt(line).text.length,
-                    line,
-                    editor.document.lineAt(line).text.length
-                );
-                const decoration = {
-                    range,
-                    renderOptions: {
-                        after: {
-                            contentText: ` <-- ${displayName}`,
-                            color: this.getColor(level),
-                            fontStyle: 'italic'
-                        }
-                    }
-                };
-                this.pushDecoration(decorations, level, decoration);
-                if (line <= cursorPosition.line) {
-                    activePath[activePath.length - 1] = displayName;
-                }
             } else if (type === 'else') {
                 const start = stack[stack.length - 1];
-                if (start) {
-                    const owner = start.name;
-                    const level = start.level;
-                    const negatedOwner = owner.startsWith('!') ? owner.substring(1) : `!${owner}`;
-                    const fullPath = stack.map(item => item.name).join('->');
-                    log.trace(
-                        DebugModule.Decorations,
-                        `Found #else: ${negatedOwner} at line ${line}, full path: ${fullPath}`
-                    );
-                    const range = new vscode.Range(
-                        line,
-                        editor.document.lineAt(line).text.length,
-                        line,
-                        editor.document.lineAt(line).text.length
-                    );
-                    const decoration = {
-                        range,
-                        renderOptions: {
-                            after: {
-                                contentText: ` <-- ${negatedOwner}`,
-                                color: this.getColor(level),
-                                fontStyle: 'italic'
-                            }
-                        }
-                    };
-                    this.pushDecoration(decorations, level, decoration);
-                    if (line <= cursorPosition.line) {
-                        activePath[activePath.length - 1] = negatedOwner;
-                    }
+                if (!start) {
+                    continue;
                 }
+                // Negate the opening condition so a stray second
+                // #else cannot negate twice and flip the label back
+                start.current = start.opener.startsWith('!') ? start.opener.substring(1) : `!${start.opener}`;
+                labels.push({ line, label: start.current, level: start.level });
+                log.trace(
+                    DebugModule.Decorations,
+                    `Found #else: ${start.current} at line ${line}, full path: ${this.pathOf(stack)}`
+                );
             } else if (type === 'endif') {
                 const start = stack.pop();
-                if (start) {
-                    const owner = start.name;
-                    const level = start.level;
-                    const fullPath = stack.map(item => item.name).concat(owner).join('->');
-                    let combinedPath = '';
-                    log.trace(
-                        DebugModule.Decorations,
-                        `elseifStack before processing #endif: ${JSON.stringify(elseifStack)}`
-                    );
-                    log.trace(DebugModule.Decorations, `stack before processing #endif: ${JSON.stringify(stack)}`);
-                    while (elseifStack.length > 0) {
-                        // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                        const elseifOwner = elseifStack.pop()!;
-                        combinedPath = combinedPath ? `${elseifOwner.name} & ${combinedPath}` : elseifOwner.name;
-                        if (
-                            elseifStack.length === 0 ||
-                            elseifOwner.type === 'ifdef' ||
-                            elseifOwner.type === 'ifndef' ||
-                            elseifOwner.type === 'if'
-                        ) {
-                            break; // Stop when reaching the first ifdef/ifndef/if
-                        }
-                    }
-                    log.trace(
-                        DebugModule.Decorations,
-                        `Found #endif: ${combinedPath} at line ${line}, full path: ${fullPath}`
-                    );
-                    const range = new vscode.Range(
-                        line,
-                        editor.document.lineAt(line).text.length,
-                        line,
-                        editor.document.lineAt(line).text.length
-                    );
-                    const decoration = {
-                        range,
-                        renderOptions: {
-                            after: {
-                                contentText: ` <-- ${combinedPath}`,
-                                color: this.getColor(level),
-                                fontStyle: 'italic'
-                            }
-                        }
-                    };
-                    this.pushDecoration(decorations, level, decoration);
-                    if (line < cursorPosition.line) {
-                        activePath.pop();
+                if (!start) {
+                    continue;
+                }
+                const fullPath = stack.map(item => item.current).concat(start.current).join('->');
+                let combinedPath = '';
+                while (elseifStack.length > 0) {
+                    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+                    const elseifOwner = elseifStack.pop()!;
+                    combinedPath = combinedPath ? `${elseifOwner.name} & ${combinedPath}` : elseifOwner.name;
+                    if (
+                        elseifStack.length === 0 ||
+                        elseifOwner.type === 'ifdef' ||
+                        elseifOwner.type === 'ifndef' ||
+                        elseifOwner.type === 'if'
+                    ) {
+                        break;
                     }
                 }
+                labels.push({ line, label: combinedPath, level: start.level });
+                log.trace(
+                    DebugModule.Decorations,
+                    `Found #endif: ${combinedPath} at line ${line}, full path: ${fullPath}`
+                );
+            }
+
+            if (reachedByCursor) {
+                activePath = stack.map(item => item.current);
             }
         }
 
-        // Apply decorations to the editor using decoration types
-        decorations.forEach((decoration, level) => {
-            if (this.decorationTypes[level]) {
-                editor.setDecorations(this.decorationTypes[level], decoration);
+        return { labels, activePath };
+    }
+
+    private pathOf(stack: { current: string }[]): string {
+        return stack.map(item => item.current).join('->');
+    }
+
+    private renderDecorations(editor: vscode.TextEditor, labels: DirectiveLabel[]) {
+        const decorations: vscode.DecorationOptions[][] = Array.from({ length: 10 }, () => []);
+
+        for (const { line, label, level } of labels) {
+            this.pushDecoration(decorations, level, this.buildDecoration(editor, line, label, level));
+        }
+
+        decorations.forEach((levelDecorations, level) => {
+            const decorationType = this.decorationTypes[level];
+            if (decorationType) {
+                editor.setDecorations(decorationType, levelDecorations);
             }
         });
+    }
 
-        // Update status bar with cursor path
-        const fullPath = activePath.length > 0 ? activePath.join('->') : '<None>';
-        log.debug(DebugModule.Decorations, `IFDEF Path, activePath: ${activePath}, full path: ${fullPath}`);
+    private applyActivePath(path: string[]) {
+        const fullPath = path.length > 0 ? path.join('->') : '<None>';
+        log.debug(DebugModule.Decorations, `IFDEF Path, activePath: ${path}, full path: ${fullPath}`);
         this.statusBarItem.text = `IFDEF Path: ${fullPath}`;
         this.statusBarItem.show();
     }
 
+    updateActivePath(editor: vscode.TextEditor) {
+        const cursorPosition = editor.selection.active;
+
+        if (this.previousCursorLine === cursorPosition.line) {
+            editor.setDecorations(this.cursorDecorationType, []);
+            return;
+        }
+
+        log.debug(DebugModule.Decorations, `Prev: ${this.previousCursorLine}; New: ${cursorPosition.line}`);
+        log.trace(
+            DebugModule.Decorations,
+            `Cursor position: Line ${cursorPosition.line}, Character ${cursorPosition.character}`
+        );
+        this.previousCursorLine = cursorPosition.line;
+
+        const directives = this.parseDirectives(editor.document);
+        this.applyActivePath(this.walkDirectives(directives, cursorPosition.line).activePath);
+    }
+
+    /** Re-parse and re-render immediately. For edits, prefer the debounced onDocumentChanged. */
+    refresh(editor: vscode.TextEditor) {
+        const cursorLine = editor.selection.active.line;
+        const { labels, activePath } = this.walkDirectives(this.parseDirectives(editor.document), cursorLine);
+
+        this.renderDecorations(editor, labels);
+        this.previousCursorLine = cursorLine;
+        this.applyActivePath(activePath);
+    }
+
+    /**
+     * Debounced refresh for text edits: a full-document scan per keystroke is too expensive on
+     * large files, so coalesce bursts of edits into a single trailing render per document.
+     */
+    onDocumentChanged(editor: vscode.TextEditor) {
+        const key = editor.document.uri.toString();
+        const pending = this.pendingRenders.get(key);
+        if (pending !== undefined) {
+            clearTimeout(pending);
+        }
+
+        this.pendingRenders.set(key, setTimeout(() => {
+            this.pendingRenders.delete(key);
+            if (editor.document.isClosed) {
+                return;
+            }
+            this.refresh(editor);
+        }, renderDebounceMs));
+    }
+
     dispose() {
+        this.pendingRenders.forEach(timer => clearTimeout(timer));
+        this.pendingRenders.clear();
         this.statusBarItem.dispose();
         this.cursorDecorationType.dispose();
         this.decorationTypes.forEach(type => type.dispose());
     }
 }
-

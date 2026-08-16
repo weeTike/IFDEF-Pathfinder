@@ -25,19 +25,19 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.languages.registerFoldingRangeProvider({ language: 'cpp' }, new IfdefFoldingProvider()),
         vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor) {
-                decorationProvider.updateDecorations(editor);
+                decorationProvider.refresh(editor);
             }
         }),
         vscode.workspace.onDidChangeTextDocument(event => {
             const editor = vscode.window.activeTextEditor;
             if (event.document === editor?.document) {
-                decorationProvider.updateDecorations(editor);
+                decorationProvider.onDocumentChanged(editor);
             }
         }),
         vscode.workspace.onDidOpenTextDocument(document => {
             const editor = vscode.window.visibleTextEditors.find(e => e.document === document);
             if (editor) {
-                decorationProvider.updateDecorations(editor);
+                decorationProvider.refresh(editor);
             }
         })
     );
@@ -73,7 +73,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(disposable);
 
     if (vscode.window.activeTextEditor) {
-        decorationProvider.updateDecorations(vscode.window.activeTextEditor);
+        decorationProvider.refresh(vscode.window.activeTextEditor);
     }
 }
 
