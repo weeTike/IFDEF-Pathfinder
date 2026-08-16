@@ -68,8 +68,11 @@
     ]
   },
   "scripts": {
-    "vscode:prepublish": "npm run compile",
+    "vscode:prepublish": "npm run rm-out && npm run esbuild-base -- --minify",
+    "esbuild-base": "esbuild ./src/extension.ts --bundle --outfile=out/extension.js --external:vscode --external:node:* --format=cjs --platform=node --tree-shaking=true --drop:console --drop:debugger",
+    "esbuild": "npm run esbuild-base -- --sourcemap",
     "compile": "tsc -p ./",
+    "rm-out": "node -e \"fs.rmSync('out',{recursive:true,force:true})\"",
     "watch": "tsc -watch -p ./",
     "lint": "eslint src syntaxes"
   },
@@ -81,11 +84,15 @@
     "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.72.1",
     "@vscode/test-electron": "^3.1.0",
+    "esbuild": "^0.28.2",
     "eslint": "^10.14.0",
     "typescript": "^6.0.3"
   },
   "repository": {
     "type": "git",
     "url": "https://github.com/tanffn/IFDEF-Pathfinder.git"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true
   }
 }
