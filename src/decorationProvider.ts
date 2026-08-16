@@ -291,26 +291,3 @@ export class IfdefDecorationProvider {
     }
 }
 
-// Activation function for the extension
-export function activate(context: vscode.ExtensionContext) {
-    const provider = new IfdefDecorationProvider();
-
-    // Register the provider to update decorations when the active editor changes
-    vscode.window.onDidChangeActiveTextEditor(editor => {
-        if (editor) {
-            provider.updateDecorations(editor);
-        }
-    });
-
-    // Update decorations for the active editor on activation
-    if (vscode.window.activeTextEditor) {
-        provider.updateDecorations(vscode.window.activeTextEditor);
-    }
-
-    // Add the status bar item to the extension context
-    context.subscriptions.push(provider);
-}
-
-export function deactivate() {
-    // Dispose of resources when the extension is deactivated
-}
