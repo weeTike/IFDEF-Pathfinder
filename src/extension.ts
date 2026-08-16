@@ -1,8 +1,12 @@
 import * as vscode from 'vscode';
 import { IfdefFoldingProvider } from './FoldingProvider';
 import { IfdefDecorationProvider } from './decorationProvider';
+import { getLogger } from './log';
 
 export function activate(context: vscode.ExtensionContext) {
+    // Start the extension logger
+    context.subscriptions.push(getLogger());
+
     // Disable default C/C++ folding for preprocessor directives
     vscode.workspace.getConfiguration('C_Cpp').update('foldingRange', false, vscode.ConfigurationTarget.Global);
 

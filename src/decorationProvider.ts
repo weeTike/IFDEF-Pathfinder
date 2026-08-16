@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
-import { log, DebugModule } from './logger';
+import * as log from './log';
+import { DebugModule } from './log';
 
 export class IfdefDecorationProvider {
 
@@ -50,9 +51,9 @@ export class IfdefDecorationProvider {
         if (bucket) {
             bucket.push(decoration);
         } else {
-            log(
+            log.warning(
                 DebugModule.Decorations,
-                `Warning: nesting level ${level} exceeds supported depth (${decorations.length}); decoration skipped`
+                `Nesting level ${level} exceeds supported depth (${decorations.length}); decoration skipped`
             );
         }
     }
@@ -75,7 +76,7 @@ export class IfdefDecorationProvider {
 
         // Check if the cursor line has changed
         if (this.previousCursorLine !== cursorPosition.line) {
-            log(DebugModule.Decorations, `Prev: ${this.previousCursorLine}; New: ${cursorPosition.line}`);
+            log.debug(DebugModule.Decorations, `Prev: ${this.previousCursorLine}; New: ${cursorPosition.line}`);
             this.previousCursorLine = cursorPosition.line;
         } else {
             // Clear previous cursor decorations if the cursor line hasn't changed
@@ -83,7 +84,7 @@ export class IfdefDecorationProvider {
             return;
         }
 
-        log(
+        log.trace(
             DebugModule.Decorations,
             `Cursor position: Line ${cursorPosition.line}, Character ${cursorPosition.character}`
         );
@@ -126,7 +127,10 @@ export class IfdefDecorationProvider {
                 stack.push({ line: line, type: type, name: displayName, level: level });
                 elseifStack.push({ name: displayName, type: type }); // Push into elseifStack
                 const fullPath = stack.map(item => item.name).join('->');
-                log(DebugModule.Decorations, `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`);
+                log.trace(
+                    DebugModule.Decorations,
+                    `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`
+                );
                 const range = new vscode.Range(
                     line,
                     editor.document.lineAt(line).text.length,
@@ -150,9 +154,9 @@ export class IfdefDecorationProvider {
             } else if (type === 'elseif' || type === 'elif') {
                 const lastItem = stack[stack.length - 1];
                 if (!lastItem) {
-                    log(
+                    log.warning(
                         DebugModule.Decorations,
-                        `Warning: #${type} found without matching opening directive at line ${line}`
+                        `#${type} found without matching opening directive at line ${line}`
                     );
                     continue;
                 }
@@ -164,7 +168,10 @@ export class IfdefDecorationProvider {
                 stack[stack.length - 1] = { line: line, type: type, name: displayName, level: level };
 
                 const fullPath = stack.map(item => item.name).join('->');
-                log(DebugModule.Decorations, `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`);
+                log.trace(
+                    DebugModule.Decorations,
+                    `Found #${type}: ${displayName} at line ${line}, full path: ${fullPath}`
+                );
                 const range = new vscode.Range(
                     line,
                     editor.document.lineAt(line).text.length,
@@ -192,7 +199,7 @@ export class IfdefDecorationProvider {
                     const level = start.level;
                     const negatedOwner = owner.startsWith('!') ? owner.substring(1) : `!${owner}`;
                     const fullPath = stack.map(item => item.name).join('->');
-                    log(
+                    log.trace(
                         DebugModule.Decorations,
                         `Found #else: ${negatedOwner} at line ${line}, full path: ${fullPath}`
                     );
@@ -224,11 +231,11 @@ export class IfdefDecorationProvider {
                     const level = start.level;
                     const fullPath = stack.map(item => item.name).concat(owner).join('->');
                     let combinedPath = '';
-                    log(
+                    log.trace(
                         DebugModule.Decorations,
                         `elseifStack before processing #endif: ${JSON.stringify(elseifStack)}`
                     );
-                    log(DebugModule.Decorations, `stack before processing #endif: ${JSON.stringify(stack)}`);
+                    log.trace(DebugModule.Decorations, `stack before processing #endif: ${JSON.stringify(stack)}`);
                     while (elseifStack.length > 0) {
                         // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                         const elseifOwner = elseifStack.pop()!;
@@ -242,7 +249,7 @@ export class IfdefDecorationProvider {
                             break; // Stop when reaching the first ifdef/ifndef/if
                         }
                     }
-                    log(
+                    log.trace(
                         DebugModule.Decorations,
                         `Found #endif: ${combinedPath} at line ${line}, full path: ${fullPath}`
                     );
@@ -279,7 +286,7 @@ export class IfdefDecorationProvider {
 
         // Update status bar with cursor path
         const fullPath = activePath.length > 0 ? activePath.join('->') : '<None>';
-        log(DebugModule.Decorations, `IFDEF Path, activePath: ${activePath}, full path: ${fullPath}`);
+        log.debug(DebugModule.Decorations, `IFDEF Path, activePath: ${activePath}, full path: ${fullPath}`);
         this.statusBarItem.text = `IFDEF Path: ${fullPath}`;
         this.statusBarItem.show();
     }
