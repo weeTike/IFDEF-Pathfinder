@@ -17,6 +17,7 @@ export function activate(context: vscode.ExtensionContext) {
     );
 
     const decorationProvider = new IfdefDecorationProvider();
+    context.subscriptions.push(decorationProvider);
 
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor(editor => {

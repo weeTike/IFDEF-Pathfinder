@@ -28,6 +28,7 @@ export class IfdefDecorationProvider {
     private statusBarItem: vscode.StatusBarItem;
     private previousCursorLine: number | undefined;
     private pendingRenders = new Map<string, ReturnType<typeof setTimeout>>();
+    private selectionListener: vscode.Disposable;
 
     constructor() {
         // Initialize decoration types with different colors
@@ -51,7 +52,7 @@ export class IfdefDecorationProvider {
         this.statusBarItem.text = 'IFDEF Path: <None>';
 
         // Register the event listener, ignoring selection changes in editors other than the active one
-        vscode.window.onDidChangeTextEditorSelection(event => {
+        this.selectionListener = vscode.window.onDidChangeTextEditorSelection(event => {
             if (event.textEditor === vscode.window.activeTextEditor) {
                 this.updateActivePath(event.textEditor);
             }
@@ -296,6 +297,7 @@ export class IfdefDecorationProvider {
     dispose() {
         this.pendingRenders.forEach(timer => clearTimeout(timer));
         this.pendingRenders.clear();
+        this.selectionListener.dispose();
         this.statusBarItem.dispose();
         this.cursorDecorationType.dispose();
         this.decorationTypes.forEach(type => type.dispose());
