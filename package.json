@@ -43,27 +43,14 @@
         "title": "IFDEFs - Expand All"
       }
     ],
-    "languages": [
-      {
-        "id": "cpp",
-        "aliases": [
-          "C++",
-          "cpp"
-        ],
-        "extensions": [
-          ".cpp",
-          ".cxx",
-          ".hpp",
-          ".hxx"
-        ],
-        "configuration": "./language-configuration.json"
-      }
-    ],
     "grammars": [
       {
-        "language": "cpp",
-        "scopeName": "source.preprocessor",
-        "path": "./syntaxes/preprocessor.json"
+        "scopeName": "source.preprocessor.injection",
+        "path": "./syntaxes/preprocessor.json",
+        "injectTo": [
+          "source.c",
+          "source.cpp"
+        ]
       }
     ]
   },

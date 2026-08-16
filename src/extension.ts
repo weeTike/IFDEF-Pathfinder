@@ -14,7 +14,7 @@ export function activate(context: vscode.ExtensionContext) {
     const ifdefFoldingProvider = new IfdefFoldingProvider();
     context.subscriptions.push(
         vscode.languages.registerFoldingRangeProvider(
-            { language: 'cpp' },
+            [{ language: 'c' }, { language: 'cpp' }],
             ifdefFoldingProvider
         )
     );
@@ -22,7 +22,6 @@ export function activate(context: vscode.ExtensionContext) {
     const decorationProvider = new IfdefDecorationProvider();
 
     context.subscriptions.push(
-        vscode.languages.registerFoldingRangeProvider({ language: 'cpp' }, new IfdefFoldingProvider()),
         vscode.window.onDidChangeActiveTextEditor(editor => {
             if (editor) {
                 decorationProvider.refresh(editor);

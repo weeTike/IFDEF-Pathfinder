@@ -22,7 +22,7 @@ const generateSyntax = (level) => {
 };
 
 const syntax = {
-  "scopeName": "source.preprocessor",
+  "scopeName": "source.preprocessor.injection",
   "patterns": generateSyntax(1)
 };
 
