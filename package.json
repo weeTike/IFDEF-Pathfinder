@@ -1,9 +1,9 @@
 {
-  "name": "IFDEF-Pathfinder",
+  "name": "ifdef-pathfinder",
   "displayName": "IFDEF Pathfinder",
   "description": "Show nested conditional path, highlights and folds #ifdef sections in C/C++ code",
   "version": "1.0.0",
-  "publisher": "Ariel Jacob",
+  "publisher": "arieljacob",
   "icon": "Marketing/icon.png",
   "engines": {
     "vscode": "^1.60.0"
