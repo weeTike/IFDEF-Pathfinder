@@ -24,7 +24,6 @@ const renderDebounceMs = 150;
 export class IfdefDecorationProvider {
 
     private decorationTypes: vscode.TextEditorDecorationType[] = [];
-    private cursorDecorationType: vscode.TextEditorDecorationType;
     private statusBarItem: vscode.StatusBarItem;
     private previousCursorLine: number | undefined;
     private pendingRenders = new Map<string, ReturnType<typeof setTimeout>>();
@@ -37,15 +36,6 @@ export class IfdefDecorationProvider {
                 color: this.getColor(i)
             }));
         }
-
-        // Initialize a special decoration type for the cursor position
-        this.cursorDecorationType = vscode.window.createTextEditorDecorationType({
-            after: {
-                color: 'inherit',
-                fontStyle: 'italic',
-                contentText: '',
-            }
-        });
 
         // Create a status bar item for cursor path
         this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
@@ -244,7 +234,6 @@ export class IfdefDecorationProvider {
         const cursorPosition = editor.selection.active;
 
         if (this.previousCursorLine === cursorPosition.line) {
-            editor.setDecorations(this.cursorDecorationType, []);
             return;
         }
 
@@ -294,7 +283,6 @@ export class IfdefDecorationProvider {
         this.pendingRenders.clear();
         this.selectionListener.dispose();
         this.statusBarItem.dispose();
-        this.cursorDecorationType.dispose();
         this.decorationTypes.forEach(type => type.dispose());
     }
 }
