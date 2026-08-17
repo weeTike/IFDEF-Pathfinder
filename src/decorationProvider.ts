@@ -2,9 +2,16 @@ import * as vscode from 'vscode';
 import * as log from './log';
 import { DebugModule } from './log';
 
+const directiveTypes = ['ifdef', 'ifndef', 'if', 'elseif', 'elif', 'else', 'endif'] as const;
+type DirectiveType = typeof directiveTypes[number];
+
+function isDirectiveType(value: string): value is DirectiveType {
+    return (directiveTypes as readonly string[]).includes(value);
+}
+
 interface ParsedDirective {
     line: number;
-    type: string;
+    type: DirectiveType;
     name: string;
 }
 
@@ -62,8 +69,12 @@ export class IfdefDecorationProvider {
         const directives: ParsedDirective[] = [];
 
         for (const match of document.getText().matchAll(pattern)) {
+            const rawType = match[1] ?? '';
+            if (!isDirectiveType(rawType)) {
+                continue;
+            }
+
             const line = document.positionAt(match.index).line;
-            const type = match[1] ?? '';
             let name = (match[2] ?? '').trim().split('//')[0]?.trim() ?? '';
 
             if (name.startsWith('defined(') || name.startsWith('!defined(')) {
@@ -77,7 +88,7 @@ export class IfdefDecorationProvider {
             }
             name = name.replace(/!!/g, '');
 
-            directives.push({ line, type, name });
+            directives.push({ line, type: rawType, name });
         }
 
         return directives;
@@ -119,8 +130,8 @@ export class IfdefDecorationProvider {
     }
 
     private walkDirectives(directives: ParsedDirective[], cursorLine: number): WalkResult {
-        const stack: { opener: string; current: string; type: string; level: number }[] = [];
-        const elseifStack: { name: string; type: string }[] = [];
+        const stack: { opener: string; current: string; type: DirectiveType; level: number }[] = [];
+        const elseifStack: { name: string; type: DirectiveType }[] = [];
         const labels: DirectiveLabel[] = [];
         let activePath: string[] = [];
 
@@ -169,7 +180,7 @@ export class IfdefDecorationProvider {
                     DebugModule.Decorations,
                     `Found #else: ${start.current} at line ${line}, full path: ${this.pathOf(stack)}`
                 );
-            } else if (type === 'endif') {
+            } else {
                 const start = stack.pop();
                 if (!start) {
                     continue;
