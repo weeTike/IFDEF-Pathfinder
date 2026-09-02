@@ -78,10 +78,7 @@ export class IfdefDecorationProvider {
             let name = (match[2] ?? '').trim().split('//')[0]?.trim() ?? '';
 
             if (name.startsWith('defined(') || name.startsWith('!defined(')) {
-                name = name.replace(/^!?defined\((.*?)\)/, '$1');
-                if (name.startsWith('!')) {
-                    name = `!${name.substring(1)}`;
-                }
+                name = name.replace(/^(!?)defined\((.*?)\)/, '$1$2');
             }
             if (name.startsWith('!(')) {
                 name = `!${name.substring(2, name.length - 1)}`;
