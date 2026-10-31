@@ -64,6 +64,12 @@ export class IfdefDecorationProvider {
         return colors[level % colors.length] ?? colors[0];
     }
 
+    private stripComments(name: string): string {
+        const withoutBlock = name.replace(/\/\*.*?\*\//g, '');
+        const withoutUnclosedBlock = withoutBlock.split('/*')[0] ?? '';
+        return withoutUnclosedBlock.replace(/\/\/.*$/, '').trim();
+    }
+
     private parseDirectives(document: vscode.TextDocument): ParsedDirective[] {
         const pattern = /^[ \t]*#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
         const directives: ParsedDirective[] = [];
@@ -75,7 +81,9 @@ export class IfdefDecorationProvider {
             }
 
             const line = document.positionAt(match.index).line;
-            let name = (match[2] ?? '').trim().split('//')[0]?.trim() ?? '';
+            let name = (match[2] ?? '').trim();
+
+            name = this.stripComments(name);
 
             if (name.startsWith('defined(') || name.startsWith('!defined(')) {
                 name = name.replace(/^(!?)defined\((.*?)\)/, '$1$2');
@@ -84,6 +92,11 @@ export class IfdefDecorationProvider {
                 name = `!${name.substring(2, name.length - 1)}`;
             }
             name = name.replace(/!!/g, '');
+
+            const needsCondition = rawType !== 'else' && rawType !== 'endif';
+            if (needsCondition && !name) {
+                continue;
+            }
 
             directives.push({ line, type: rawType, name });
         }
