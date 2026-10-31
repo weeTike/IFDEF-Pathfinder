@@ -70,6 +70,14 @@ export class IfdefDecorationProvider {
         return withoutUnclosedBlock.replace(/\/\/.*$/, '').trim();
     }
 
+    /** Strips each `defined()` for display */
+    private unwrapDefinedExpressions(name: string): string {
+        return name.replace(
+            /(?<![A-Za-z0-9_])defined\(\s*([A-Za-z_]\w*)\s*\)/g,
+            '$1'
+        );
+    }
+
     private parseDirectives(document: vscode.TextDocument): ParsedDirective[] {
         const pattern = /^[ \t]*#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
         const directives: ParsedDirective[] = [];
@@ -84,14 +92,7 @@ export class IfdefDecorationProvider {
             let name = (match[2] ?? '').trim();
 
             name = this.stripComments(name);
-
-            if (name.startsWith('defined(') || name.startsWith('!defined(')) {
-                name = name.replace(/^(!?)defined\((.*?)\)/, '$1$2');
-            }
-            if (name.startsWith('!(')) {
-                name = `!${name.substring(2, name.length - 1)}`;
-            }
-            name = name.replace(/!!/g, '');
+            name = this.unwrapDefinedExpressions(name);
 
             const needsCondition = rawType !== 'else' && rawType !== 'endif';
             if (needsCondition && !name) {
