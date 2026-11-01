@@ -53,11 +53,8 @@ export function activate(context: vscode.ExtensionContext) {
             const line = position.line;
             const { startLine, endLine } = findIfdefSection(editor, line);
             if (startLine !== undefined && endLine !== undefined) {
-                const range = new vscode.Range(startLine, 0, endLine, editor.document.lineAt(endLine).text.length);
-                editor.selection =
-                    new vscode.Selection(startLine, 0, endLine, editor.document.lineAt(endLine).text.length);
-                editor.revealRange(range);
-                vscode.commands.executeCommand('editor.fold');
+                editor.revealRange(new vscode.Range(startLine, 0, endLine, 0));
+                vscode.commands.executeCommand('editor.fold', { selectionLines: [startLine], levels: 1 });
             }
         }
     });
@@ -74,31 +71,56 @@ export function activate(context: vscode.ExtensionContext) {
     }
 }
 
-function findIfdefSection(editor: vscode.TextEditor, line: number): { startLine?: number; endLine?: number } {
-    const ifdefPattern = /#(ifdef|ifndef|if|elseif|elif)/;
-    const endifPattern = /#endif/;
-    let startLine: number | undefined = undefined;
-    let endLine: number | undefined = undefined;
+const preprocessorOpenPattern = /^[ \t]*#(?:ifdef|ifndef|if)\b/;
+const preprocessorBranchPattern = /^[ \t]*#(?:else|elseif|elif)\b/;
+const preprocessorEndifPattern = /^[ \t]*#endif\b/;
 
-    // Find start of current ifdef section
-    for (let i = line; i >= 0; i--) {
-        const textLine = editor.document.lineAt(i);
-        if (textLine.text.match(ifdefPattern)) {
-            startLine = i;
-            break;
+/**
+ * Innermost `#if` block containing `line`. If the cursor is on an `#else` / `#elif` branch,
+ * the range starts at that branch (matching fold regions), not at the opening `#if`.
+ */
+function findIfdefSection(editor: vscode.TextEditor, line: number): { startLine?: number; endLine?: number } {
+    const openStack: number[] = [];
+
+    for (let i = 0; i <= line; i++) {
+        const text = editor.document.lineAt(i).text;
+        if (preprocessorOpenPattern.test(text)) {
+            openStack.push(i);
+        } else if (i < line && preprocessorEndifPattern.test(text)) {
+            openStack.pop();
         }
     }
 
-    if (startLine !== undefined) {
-        // Find end of current ifdef section
-        for (let i = startLine; i < editor.document.lineCount; i++) {
-            const textLine = editor.document.lineAt(i);
-            if (textLine.text.match(endifPattern)) {
+    const blockOpenLine = openStack[openStack.length - 1];
+    if (blockOpenLine === undefined) {
+        return {};
+    }
+
+    let depth = 0;
+    let endLine: number | undefined;
+    let branchStart: number | undefined;
+
+    for (let i = blockOpenLine; i < editor.document.lineCount; i++) {
+        const text = editor.document.lineAt(i).text;
+        if (preprocessorOpenPattern.test(text)) {
+            depth++;
+        } else if (preprocessorBranchPattern.test(text)) {
+            if (depth === 1 && i <= line) {
+                branchStart = i;
+            }
+        } else if (preprocessorEndifPattern.test(text)) {
+            depth--;
+            if (depth === 0) {
                 endLine = i;
                 break;
             }
         }
     }
 
+    if (endLine === undefined) {
+        return { startLine: branchStart ?? blockOpenLine };
+    }
+
+    const startLine = branchStart ?? blockOpenLine;
     return { startLine, endLine };
 }
