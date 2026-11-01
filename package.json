@@ -68,7 +68,8 @@
     "compile": "tsc -p ./",
     "rm-out": "node -e \"fs.rmSync('out',{recursive:true,force:true})\"",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src syntaxes"
+    "lint": "eslint src syntaxes",
+    "test": "tsc -p ./ --outDir out/unit && mocha \"out/unit/test/**/*.test.js\""
   },
   "devDependencies": {
     "@stylistic/eslint-plugin": "^5.10.0",
@@ -77,9 +78,9 @@
     "@types/vscode": "~1.74.0",
     "@typescript-eslint/eslint-plugin": "^8.72.1",
     "@typescript-eslint/parser": "^8.72.1",
-    "@vscode/test-electron": "^3.1.0",
     "esbuild": "^0.28.2",
     "eslint": "^10.14.0",
+    "mocha": "^12.0.3",
     "typescript": "^6.0.3"
   },
   "repository": {
