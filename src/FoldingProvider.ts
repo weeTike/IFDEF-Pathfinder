@@ -10,13 +10,13 @@ export class IfdefFoldingProvider implements vscode.FoldingRangeProvider {
     ): vscode.ProviderResult<vscode.FoldingRange[]> {
         const foldingRanges: vscode.FoldingRange[] = [];
         const stack: { startLine: number, type: string }[] = [];
+        const traceEnabled = log.isTraceEnabled();
 
         log.debug(DebugModule.Folding, `Processing document with ${document.lineCount} lines`);
 
         for (let i = 0; i < document.lineCount; i++) {
             const line = document.lineAt(i);
             const text = line.text.trim();
-            log.trace(DebugModule.Folding, `Line ${i + 1}: Processing "${text}"`);
 
             const openMatch = text.match(/^#[ \t]*(ifdef|ifndef|if)\b/);
             const elseMatch = text.match(/^#[ \t]*(elseif|else|elifdef|elifndef|elif)\b/);
@@ -25,7 +25,9 @@ export class IfdefFoldingProvider implements vscode.FoldingRangeProvider {
                 const directiveType = openMatch[1];
                 log.trace(DebugModule.Folding, `Line ${i + 1}: Found ${directiveType} directive`);
                 stack.push({ startLine: i, type: directiveType });
-                log.trace(DebugModule.Folding, `Stack pushed: ${JSON.stringify(stack)}`);
+                if (traceEnabled) {
+                    log.trace(DebugModule.Folding, `Stack pushed: ${JSON.stringify(stack)}`);
+                }
             } else if (elseMatch?.[1]) {
                 const directiveType = elseMatch[1];
                 log.trace(DebugModule.Folding, `Line ${i + 1}: Found #${directiveType} directive`);
@@ -38,7 +40,9 @@ export class IfdefFoldingProvider implements vscode.FoldingRangeProvider {
                     foldingRanges.push(new vscode.FoldingRange(start.startLine, i - 1));
                     // Push new block for else/elseif/elif
                     stack.push({ startLine: i, type: directiveType });
-                    log.trace(DebugModule.Folding, `Updated stack: ${JSON.stringify(stack)}`);
+                    if (traceEnabled) {
+                        log.trace(DebugModule.Folding, `Updated stack: ${JSON.stringify(stack)}`);
+                    }
                 } else {
                     log.warning(
                         DebugModule.Folding,
@@ -51,7 +55,9 @@ export class IfdefFoldingProvider implements vscode.FoldingRangeProvider {
                 if (start) {
                     log.trace(DebugModule.Folding, `Creating folding range from line ${start.startLine} to ${i}`);
                     foldingRanges.push(new vscode.FoldingRange(start.startLine, i));
-                    log.trace(DebugModule.Folding, `Stack after pop: ${JSON.stringify(stack)}`);
+                    if (traceEnabled) {
+                        log.trace(DebugModule.Folding, `Stack after pop: ${JSON.stringify(stack)}`);
+                    }
                 } else {
                     log.warning(DebugModule.Folding, '#endif found without matching opening directive');
                 }
@@ -70,7 +76,9 @@ export class IfdefFoldingProvider implements vscode.FoldingRangeProvider {
         }
 
         log.debug(DebugModule.Folding, `Created ${foldingRanges.length} folding ranges`);
-        log.trace(DebugModule.Folding, `Final folding ranges: ${JSON.stringify(foldingRanges)}`);
+        if (traceEnabled) {
+            log.trace(DebugModule.Folding, `Final folding ranges: ${JSON.stringify(foldingRanges)}`);
+        }
         return foldingRanges;
     }
 }

@@ -12,6 +12,10 @@ export function getLogger(): vscode.LogOutputChannel {
     return logger;
 }
 
+export function isTraceEnabled(): boolean {
+    return getLogger().logLevel === vscode.LogLevel.Trace;
+}
+
 export function trace(module: DebugModule, message: string) {
     const moduleName = DebugModule[module];
     getLogger().trace(`[${moduleName}] ${message}`);
