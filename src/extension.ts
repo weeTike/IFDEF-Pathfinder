@@ -71,9 +71,9 @@ export function activate(context: vscode.ExtensionContext) {
     }
 }
 
-const preprocessorOpenPattern = /^[ \t]*#(?:ifdef|ifndef|if)\b/;
-const preprocessorBranchPattern = /^[ \t]*#(?:else|elseif|elif)\b/;
-const preprocessorEndifPattern = /^[ \t]*#endif\b/;
+const preprocessorOpenPattern = /^[ \t]*#[ \t]*(?:ifdef|ifndef|if)\b/;
+const preprocessorBranchPattern = /^[ \t]*#[ \t]*(?:else|elseif|elifdef|elifndef|elif)\b/;
+const preprocessorEndifPattern = /^[ \t]*#[ \t]*endif\b/;
 
 /**
  * Innermost `#if` block containing `line`. If the cursor is on an `#else` / `#elif` branch,

@@ -18,8 +18,8 @@ export class IfdefFoldingProvider implements vscode.FoldingRangeProvider {
             const text = line.text.trim();
             log.trace(DebugModule.Folding, `Line ${i + 1}: Processing "${text}"`);
 
-            const openMatch = text.match(/^#(ifdef|ifndef|if)/);
-            const elseMatch = text.match(/^#(else|elseif|elif)/);
+            const openMatch = text.match(/^#[ \t]*(ifdef|ifndef|if)\b/);
+            const elseMatch = text.match(/^#[ \t]*(elseif|else|elifdef|elifndef|elif)\b/);
 
             if (openMatch?.[1]) {
                 const directiveType = openMatch[1];
@@ -45,7 +45,7 @@ export class IfdefFoldingProvider implements vscode.FoldingRangeProvider {
                         `#${directiveType} found without matching opening directive`
                     );
                 }
-            } else if (/^#(endif)/.test(text)) {
+            } else if (/^#[ \t]*endif\b/.test(text)) {
                 log.trace(DebugModule.Folding, `Line ${i + 1}: Found #endif directive`);
                 const start = stack.pop();
                 if (start) {

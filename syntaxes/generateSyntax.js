@@ -8,11 +8,11 @@ const generateSyntax = (level) => {
   
   return [
     {
-      "begin": `#ifdef\\b`,
+      "begin": `#[ \\t]*ifdef\\b`,
       "beginCaptures": {
         "0": { "name": `keyword.control.preprocessor.ifdef.level${level}` }
       },
-      "end": `#endif\\b`,
+      "end": `#[ \\t]*endif\\b`,
       "endCaptures": {
         "0": { "name": `keyword.control.preprocessor.endif.level${level}` }
       },

@@ -2,7 +2,9 @@ import * as vscode from 'vscode';
 import * as log from './log';
 import { DebugModule } from './log';
 
-const directiveTypes = ['ifdef', 'ifndef', 'if', 'elseif', 'elif', 'else', 'endif'] as const;
+const directiveTypes = [
+    'ifdef', 'ifndef', 'if', 'elseif', 'elifdef', 'elifndef', 'elif', 'else', 'endif'
+] as const;
 type DirectiveType = typeof directiveTypes[number];
 
 function isDirectiveType(value: string): value is DirectiveType {
@@ -99,7 +101,7 @@ export class IfdefDecorationProvider {
     }
 
     private parseDirectives(document: vscode.TextDocument): ParsedDirective[] {
-        const pattern = /^[ \t]*#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
+        const pattern = /^[ \t]*#[ \t]*(ifdef|ifndef|if|elseif|elifdef|elifndef|elif|else|endif)\b([^\r\n]*)/gm;
         const directives: ParsedDirective[] = [];
 
         for (const match of document.getText().matchAll(pattern)) {
@@ -177,7 +179,7 @@ export class IfdefDecorationProvider {
                     DebugModule.Decorations,
                     `Found #${type}: ${displayName} at line ${line}, full path: ${this.pathOf(stack)}`
                 );
-            } else if (type === 'elseif' || type === 'elif') {
+            } else if (type === 'elseif' || type === 'elif' || type === 'elifdef' || type === 'elifndef') {
                 const lastItem = stack[stack.length - 1];
                 if (!lastItem) {
                     log.warning(
@@ -186,13 +188,14 @@ export class IfdefDecorationProvider {
                     );
                     continue;
                 }
-                lastItem.current = name;
+                const displayName = type === 'elifndef' ? this.negateCondition(name) : name;
+                lastItem.current = displayName;
                 lastItem.type = type;
-                elseifStack.push({ name, type });
-                labels.push({ line, label: name, level: lastItem.level });
+                elseifStack.push({ name: displayName, type });
+                labels.push({ line, label: displayName, level: lastItem.level });
                 log.trace(
                     DebugModule.Decorations,
-                    `Found #${type}: ${name} at line ${line}, full path: ${this.pathOf(stack)}`
+                    `Found #${type}: ${displayName} at line ${line}, full path: ${this.pathOf(stack)}`
                 );
             } else if (type === 'else') {
                 const start = stack[stack.length - 1];
