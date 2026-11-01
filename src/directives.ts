@@ -12,14 +12,24 @@ const directivePattern = /^[ \t]*#[ \t]*(ifdef|ifndef|if|elseif|elifdef|elifndef
 
 export interface Directive {
     line: number;
+    /** Last line of the directive, which differs from `line` when lines are continued with `\` */
+    endLine: number;
     type: DirectiveType;
     condition: string;
+    comment: string;
+    /** Column of the `#` */
+    keywordStart: number;
+    /** Column just after the directive name */
+    keywordEnd: number;
 }
 
 export interface DirectiveLabel {
     line: number;
+    endLine: number;
     label: string;
     level: number;
+    /** An `#endif` whose comment already names the block it closes */
+    hasMatchingComment: boolean;
 }
 
 export interface PathCheckpoint {
@@ -50,6 +60,12 @@ export interface DirectiveAnalysis {
     blocks: ConditionalBlock[];
     foldRanges: FoldRange[];
     warnings: DirectiveWarning[];
+    includeGuard?: ConditionalBlock;
+}
+
+export interface AnalysisOptions {
+    /** Leaves the include guard out of labels and paths, so that it does not add a level to every block */
+    ignoreIncludeGuards?: boolean;
 }
 
 function isDirectiveType(value: string): value is DirectiveType {
@@ -70,6 +86,18 @@ export function stripComments(condition: string): string {
     return withoutUnclosedBlock.replace(/\/\/.*$/, '').trim();
 }
 
+/** Text of every comment on a directive line, without the comment markers */
+export function extractComment(text: string): string {
+    const comments: string[] = [];
+    for (const match of text.matchAll(/\/\*(.*?)(?:\*\/|$)|\/\/(.*)$/g)) {
+        const comment = (match[1] ?? match[2] ?? '').trim();
+        if (comment) {
+            comments.push(comment);
+        }
+    }
+    return comments.join(' ');
+}
+
 /** Strips each `defined()` for display */
 export function unwrapDefinedExpressions(condition: string): string {
     return condition.replace(
@@ -80,12 +108,26 @@ export function unwrapDefinedExpressions(condition: string): string {
 
 /** Negates a condition for display; anything other than a single name is bracketed */
 export function negateCondition(condition: string): string {
+    if (!condition) {
+        return condition;
+    }
     const negatedName = /^!\s*(\w+)$/.exec(condition);
     if (negatedName?.[1]) {
         return negatedName[1];
     }
     return /^\w+$/.test(condition) ? `!${condition}` : `!(${condition})`;
 }
+
+/** Offset of the end of the line containing `offset`, before any `\r\n` or `\n` */
+function lineEndAt(text: string, offset: number): number {
+    const newline = text.indexOf('\n', offset);
+    if (newline === -1) {
+        return text.length;
+    }
+    return newline > offset && text.charCodeAt(newline - 1) === 13 ? newline - 1 : newline;
+}
+
+const continuationPattern = /\\[ \t]*$/;
 
 export function parseDirectives(text: string): Directive[] {
     const directives: Directive[] = [];
@@ -94,7 +136,8 @@ export function parseDirectives(text: string): Directive[] {
 
     for (const match of text.matchAll(directivePattern)) {
         const type = match[1] ?? '';
-        if (!isDirectiveType(type)) {
+        // Text on a continued line belongs to the directive before it
+        if (!isDirectiveType(type) || match.index < scannedTo) {
             continue;
         }
 
@@ -104,31 +147,54 @@ export function parseDirectives(text: string): Directive[] {
             }
         }
 
-        const condition = unwrapDefinedExpressions(stripComments((match[2] ?? '').trim()));
-        directives.push({ line, type, condition });
+        let rest = match[2] ?? '';
+        let endLine = line;
+        let end = match.index + match[0].length;
+        while (continuationPattern.test(rest) && end < text.length) {
+            const nextLineStart = text.indexOf('\n', end) + 1;
+            const nextLineEnd = lineEndAt(text, nextLineStart);
+            rest = rest.replace(continuationPattern, ' ') + text.slice(nextLineStart, nextLineEnd);
+            end = nextLineEnd;
+            endLine++;
+        }
+        scannedTo = end;
+
+        const keywordStart = match[0].indexOf('#');
+        const keywordEnd = match[0].length - (match[2]?.length ?? 0);
+        const condition = unwrapDefinedExpressions(stripComments(rest.trim()).replace(/\s+/g, ' '));
+        directives.push({ line, endLine, type, condition, comment: extractComment(rest), keywordStart, keywordEnd });
+        line = endLine;
     }
 
     return directives;
 }
 
+/** Normalises a condition so that `defined(A)`, `defined A` and `A` compare equal */
+function normaliseCondition(condition: string): string {
+    return unwrapDefinedExpressions(condition).replace(/(?<![A-Za-z0-9_])defined\s+/g, '').replace(/\s+/g, '');
+}
+
+/** Whether the text after `#endif` names the condition of the block it closes */
+function namesCondition(endif: Directive, conditions: string[]): boolean {
+    const names = conditions.filter(condition => condition).map(normaliseCondition);
+    return [endif.comment, endif.condition].some(text => text && names.includes(normaliseCondition(text)));
+}
+
 function walkLabels(directives: Directive[]): Pick<DirectiveAnalysis, 'labels' | 'checkpoints'> {
-    const stack: { opener: string; current: string; level: number }[] = [];
+    const stack: { condition: string; opener: string; current: string; level: number }[] = [];
     const elseifStack: { name: string; type: DirectiveType }[] = [];
     const labels: DirectiveLabel[] = [];
     const checkpoints: PathCheckpoint[] = [];
 
-    for (const { line, type, condition } of directives) {
-        // A directive still being typed has no condition yet and is not labelled
-        if (!condition && type !== 'else' && type !== 'endif') {
-            continue;
-        }
+    for (const directive of directives) {
+        const { line, endLine, type, condition } = directive;
 
         if (isOpener(type)) {
             const level = stack.length;
             const displayName = type === 'ifndef' ? negateCondition(condition) : condition;
-            stack.push({ opener: displayName, current: displayName, level });
+            stack.push({ condition, opener: displayName, current: displayName, level });
             elseifStack.push({ name: displayName, type });
-            labels.push({ line, label: displayName, level });
+            labels.push({ line, endLine, label: displayName, level, hasMatchingComment: false });
         } else if (type === 'else') {
             const start = stack[stack.length - 1];
             if (!start) {
@@ -137,7 +203,7 @@ function walkLabels(directives: Directive[]): Pick<DirectiveAnalysis, 'labels' |
             // Negate the opening condition so a stray second
             // #else cannot negate twice and flip the label back
             start.current = negateCondition(start.opener);
-            labels.push({ line, label: start.current, level: start.level });
+            labels.push({ line, endLine, label: start.current, level: start.level, hasMatchingComment: false });
         } else if (type === 'endif') {
             const start = stack.pop();
             if (!start) {
@@ -147,12 +213,15 @@ function walkLabels(directives: Directive[]): Pick<DirectiveAnalysis, 'labels' |
             while (elseifStack.length > 0) {
                 // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
                 const elseifOwner = elseifStack.pop()!;
-                combinedPath = combinedPath ? `${elseifOwner.name} & ${combinedPath}` : elseifOwner.name;
+                if (elseifOwner.name) {
+                    combinedPath = combinedPath ? `${elseifOwner.name} & ${combinedPath}` : elseifOwner.name;
+                }
                 if (elseifStack.length === 0 || isOpener(elseifOwner.type)) {
                     break;
                 }
             }
-            labels.push({ line, label: combinedPath, level: start.level });
+            const hasMatchingComment = namesCondition(directive, [start.condition, start.opener, combinedPath]);
+            labels.push({ line, endLine, label: combinedPath, level: start.level, hasMatchingComment });
         } else {
             const lastItem = stack[stack.length - 1];
             if (!lastItem) {
@@ -161,7 +230,7 @@ function walkLabels(directives: Directive[]): Pick<DirectiveAnalysis, 'labels' |
             const displayName = type === 'elifndef' ? negateCondition(condition) : condition;
             lastItem.current = displayName;
             elseifStack.push({ name: displayName, type });
-            labels.push({ line, label: displayName, level: lastItem.level });
+            labels.push({ line, endLine, label: displayName, level: lastItem.level, hasMatchingComment: false });
         }
 
         checkpoints.push({ line, isEndif: type === 'endif', path: stack.map(item => item.current) });
@@ -216,10 +285,51 @@ function walkBlocks(
     return { blocks, foldRanges, warnings };
 }
 
-export function analyzeDirectives(text: string): DirectiveAnalysis {
+function isOnlyComments(lines: readonly string[]): boolean {
+    return lines.join('\n').replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '').trim() === '';
+}
+
+/**
+ * Block of the form `#ifndef X` / `#define X` ... `#endif` that wraps the whole file, with nothing but
+ * comments outside it
+ */
+function findIncludeGuard(
+    directives: readonly Directive[],
+    blocks: readonly ConditionalBlock[],
+    lines: readonly string[]
+): ConditionalBlock | undefined {
+    const opener = directives[0];
+    const block = blocks[0];
+    if (!opener || block?.endLine === undefined || block.branchLines.length > 0) {
+        return undefined;
+    }
+
+    const name = opener.type === 'ifndef'
+        ? /^(\w+)$/.exec(opener.condition)?.[1]
+        : opener.type === 'if' ? /^!\s*(?:defined\s+)?(\w+)$/.exec(opener.condition)?.[1] : undefined;
+    if (!name || directives[directives.length - 1]?.line !== block.endLine) {
+        return undefined;
+    }
+
+    const defineLine = lines.slice(opener.endLine + 1).find(text => text.trim() !== '');
+    if (!defineLine || !new RegExp(`^[ \\t]*#[ \\t]*define[ \\t]+${name}\\b`).test(defineLine)) {
+        return undefined;
+    }
+
+    const isWrapped = isOnlyComments(lines.slice(0, opener.line)) && isOnlyComments(lines.slice(block.endLine + 1));
+    return isWrapped ? block : undefined;
+}
+
+export function analyzeDirectives(text: string, options: AnalysisOptions = {}): DirectiveAnalysis {
     const directives = parseDirectives(text);
-    const lineCount = text.split('\n').length;
-    return { ...walkLabels(directives), ...walkBlocks(directives, lineCount) };
+    const lines = text.split('\n');
+    const blockAnalysis = walkBlocks(directives, lines.length);
+    const includeGuard = findIncludeGuard(directives, blockAnalysis.blocks, lines);
+
+    const labelled = options.ignoreIncludeGuards && includeGuard
+        ? directives.filter(({ line }) => line !== includeGuard.openLine && line !== includeGuard.endLine)
+        : directives;
+    return { ...walkLabels(labelled), ...blockAnalysis, includeGuard };
 }
 
 /** Conditions in effect on `line`. An `#endif` on that line still counts as inside the block it closes. */

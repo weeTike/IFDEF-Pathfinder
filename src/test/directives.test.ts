@@ -71,7 +71,53 @@ describe('parseDirectives', () => {
     });
 
     it('does not read #elifdef as #elif with condition "def X"', () => {
-        assert.deepStrictEqual(parseDirectives('#elifdef X'), [{ line: 0, type: 'elifdef', condition: 'X' }]);
+        assert.deepStrictEqual(
+            parseDirectives('#elifdef X').map(({ type, condition }) => [type, condition]),
+            [['elifdef', 'X']]
+        );
+    });
+
+    it('records the columns of the directive keyword', () => {
+        const directives = parseDirectives('#if A\n  # ifdef B\n\t#endif');
+        assert.deepStrictEqual(
+            directives.map(({ keywordStart, keywordEnd }) => [keywordStart, keywordEnd]),
+            [[0, 3], [2, 9], [1, 7]]
+        );
+    });
+
+    it('keeps the comment text without its markers', () => {
+        assert.deepStrictEqual(
+            parseDirectives('#endif // A\n#endif /* B */ // C\n#endif /* D\n#endif').map(({ comment }) => comment),
+            ['A', 'B C', 'D', '']
+        );
+    });
+
+    it('joins lines continued with a backslash', () => {
+        for (const separator of ['\n', '\r\n']) {
+            const text = ['#if defined(A) && \\', '    defined(B) \\  ', '    || C', 'x', '#endif'].join(separator);
+            assert.deepStrictEqual(
+                parseDirectives(text).map(({ line, endLine, condition }) => [line, endLine, condition]),
+                [[0, 2, 'A && B || C'], [4, 4, '']]
+            );
+        }
+    });
+
+    it('does not read a continued line as a new directive', () => {
+        assert.deepStrictEqual(
+            parseDirectives('#if A \\\n#endif\n#endif').map(({ line, type, condition }) => [line, type, condition]),
+            [[0, 'if', 'A #endif'], [2, 'endif', '']]
+        );
+    });
+
+    it('continues a line comment onto the next line, as the preprocessor does', () => {
+        assert.strictEqual(parseDirectives('#if A // note \\\n && B')[0]?.condition, 'A');
+    });
+
+    it('stops at the end of the text after a trailing backslash', () => {
+        assert.deepStrictEqual(
+            parseDirectives('#if A \\').map(({ endLine, condition }) => [endLine, condition]),
+            [[0, 'A \\']]
+        );
     });
 
     it('accepts punctuation straight after the directive name', () => {
@@ -154,6 +200,121 @@ describe('labels', () => {
     it('does not label branches and #endif without an opening directive', () => {
         assert.deepStrictEqual(labels('#elif A', '#else', '#endif', '#if B', '#endif'), ['#if B -> B', '#endif -> B']);
     });
+
+    it('keeps a directive whose condition has not been typed yet, so #endif closes the right block', () => {
+        assert.deepStrictEqual(
+            labels('#if A', '#if', '#endif', '#endif'),
+            ['#if A -> A', '#if -> ', '#endif -> ', '#endif -> A']
+        );
+        assert.deepStrictEqual(
+            labels('#if A', '#ifndef', '#else', '#elif', '#endif', '#endif'),
+            ['#if A -> A', '#ifndef -> ', '#else -> ', '#elif -> ', '#endif -> ', '#endif -> A']
+        );
+    });
+
+    it('places the label of a continued directive on its last line', () => {
+        assert.deepStrictEqual(
+            analyzeDirectives('#if A && \\\n B\n#endif').labels.map(({ line, endLine }) => [line, endLine]),
+            [[0, 1], [2, 2]]
+        );
+    });
+
+    it('tracks nesting deeper than ten levels', () => {
+        const depth = 12;
+        const lines = [...Array.from({ length: depth }, (_, i) => `#if L${i}`), ...Array<string>(depth).fill('#endif')];
+        const nestedLevels = Array.from({ length: depth }, (_, i) => i);
+        assert.deepStrictEqual(levels(...lines), [...nestedLevels, ...nestedLevels.reverse()]);
+    });
+});
+
+describe('#endif comments', () => {
+    function matches(...lines: string[]): boolean | undefined {
+        return analyzeDirectives(lines.join('\n')).labels.at(-1)?.hasMatchingComment;
+    }
+
+    const named: [string, string][] = [
+        ['#ifdef A', '#endif // A'],
+        ['#ifdef A', '#endif /* A */'],
+        ['#ifndef A', '#endif // A'],
+        ['#ifndef A', '#endif // !A'],
+        ['#if defined(A) && B', '#endif // defined A && B'],
+        ['#if A&&B', '#endif /* A && B */'],
+        ['#ifdef A', '#endif A'],
+    ];
+    for (const [opener, endif] of named) {
+        it(`treats "${endif}" as naming "${opener}"`, () => {
+            assert.strictEqual(matches(opener, endif), true);
+        });
+    }
+
+    it('matches the whole #elif chain', () => {
+        assert.strictEqual(matches('#if A', '#elif B', '#endif // A & B'), true);
+    });
+
+    const unnamed: [string, string][] = [
+        ['#ifdef A', '#endif'],
+        ['#ifdef A', '#endif // B'],
+        ['#ifdef A', '#endif // end of A'],
+        ['#if', '#endif'],
+    ];
+    for (const [opener, endif] of unnamed) {
+        it(`does not treat "${endif}" as naming "${opener}"`, () => {
+            assert.strictEqual(matches(opener, endif), false);
+        });
+    }
+
+    it('is only set on #endif', () => {
+        assert.deepStrictEqual(
+            analyzeDirectives('#if A // A\n#else // !A\n#endif // A').labels.map(label => label.hasMatchingComment),
+            [false, false, true]
+        );
+    });
+});
+
+describe('include guards', () => {
+    const header = [
+        '/* Copyright */', '// Notes', '', '#ifndef FOO_H', '#define FOO_H', '#ifdef A', 'a', '#endif',
+        '#endif // FOO_H', '',
+    ];
+
+    it('finds the guard and leaves it in folding and blocks', () => {
+        const analysis = analyzeDirectives(header.join('\n'));
+        assert.deepStrictEqual(analysis.includeGuard, { openLine: 3, branchLines: [], endLine: 8 });
+        assert.strictEqual(analysis.blocks.length, 2);
+        assert.strictEqual(analysis.foldRanges.length, 2);
+    });
+
+    it('leaves the guard out of labels and paths only when asked', () => {
+        const ignored = analyzeDirectives(header.join('\n'), { ignoreIncludeGuards: true });
+        assert.deepStrictEqual(ignored.labels.map(({ line, level }) => [line, level]), [[5, 0], [7, 0]]);
+        assert.deepStrictEqual(activePathAt(ignored.checkpoints, 6), ['A']);
+
+        const kept = analyzeDirectives(header.join('\n'));
+        assert.deepStrictEqual(activePathAt(kept.checkpoints, 6), ['!FOO_H', 'A']);
+    });
+
+    it('accepts #if !defined(X) and blank lines before #define', () => {
+        const guard = analyzeDirectives('#if !defined(X)\n\n# define X 1\n#endif').includeGuard;
+        assert.strictEqual(guard?.openLine, 0);
+    });
+
+    const notGuards: [string, string[]][] = [
+        ['code before the guard', ['int x;', '#ifndef X', '#define X', '#endif']],
+        ['code after the guard', ['#ifndef X', '#define X', '#endif', 'int x;']],
+        ['a directive after the guard', ['#ifndef X', '#define X', '#endif', '#ifdef Y', '#endif']],
+        ['an #else branch', ['#ifndef X', '#define X', '#else', '#endif']],
+        ['a different #define', ['#ifndef X', '#define Y', '#endif']],
+        ['a #define with a longer name', ['#ifndef X', '#define XY', '#endif']],
+        ['code before the #define', ['#ifndef X', 'int x;', '#define X', '#endif']],
+        ['an #ifdef', ['#ifdef X', '#define X', '#endif']],
+        ['a compound condition', ['#if !X && Y', '#define X', '#endif']],
+        ['an unclosed block', ['#ifndef X', '#define X']],
+    ];
+    for (const [reason, lines] of notGuards) {
+        it(`does not treat a file with ${reason} as guarded`, () => {
+            assert.strictEqual(analyzeDirectives(lines.join('\n')).includeGuard, undefined);
+        });
+    }
 });
 
 describe('activePathAt', () => {

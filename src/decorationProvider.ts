@@ -61,27 +61,13 @@ export class IfdefDecorationProvider {
         };
     }
 
-    private pushDecoration(
-        decorations: vscode.DecorationOptions[][],
-        level: number,
-        decoration: vscode.DecorationOptions
-    ) {
-        const bucket = decorations[level];
-        if (bucket) {
-            bucket.push(decoration);
-        } else {
-            log.warning(
-                DebugModule.Decorations,
-                `Nesting level ${level} exceeds supported depth (${decorations.length}); decoration skipped`
-            );
-        }
-    }
-
     private renderDecorations(editor: vscode.TextEditor, labels: DirectiveLabel[]) {
-        const decorations: vscode.DecorationOptions[][] = Array.from({ length: 10 }, () => []);
+        const decorations: vscode.DecorationOptions[][] = this.decorationTypes.map(() => []);
 
-        for (const { line, label, level } of labels) {
-            this.pushDecoration(decorations, level, this.buildDecoration(editor, line, label, level));
+        for (const { endLine, label, level, hasMatchingComment } of labels) {
+            if (label && !hasMatchingComment) {
+                decorations[level % decorations.length]?.push(this.buildDecoration(editor, endLine, label, level));
+            }
         }
 
         decorations.forEach((levelDecorations, level) => {
@@ -93,7 +79,7 @@ export class IfdefDecorationProvider {
     }
 
     private applyActivePath(path: readonly string[]) {
-        const fullPath = path.length > 0 ? path.join('->') : '<None>';
+        const fullPath = path.length > 0 ? path.map(part => part || '?').join('->') : '<None>';
         log.debug(DebugModule.Decorations, `IFDEF Path, activePath: ${path}, full path: ${fullPath}`);
         this.statusBarItem.text = `IFDEF Path: ${fullPath}`;
         this.statusBarItem.show();
