@@ -21,9 +21,19 @@ interface DirectiveLabel {
     level: number;
 }
 
+interface PathCheckpoint {
+    line: number;
+    isEndif: boolean;
+    path: readonly string[];
+}
+
 interface WalkResult {
     labels: DirectiveLabel[];
-    activePath: string[];
+    checkpoints: PathCheckpoint[];
+}
+
+interface DocumentAnalysis extends WalkResult {
+    version: number;
 }
 
 const renderDebounceMs = 150;
@@ -34,6 +44,7 @@ export class IfdefDecorationProvider {
     private statusBarItem: vscode.StatusBarItem;
     private previousCursorLine: number | undefined;
     private pendingRenders = new Map<string, ReturnType<typeof setTimeout>>();
+    private analyses = new WeakMap<vscode.TextDocument, DocumentAnalysis>();
     private selectionListener: vscode.Disposable;
 
     constructor() {
@@ -140,16 +151,13 @@ export class IfdefDecorationProvider {
         }
     }
 
-    private walkDirectives(directives: ParsedDirective[], cursorLine: number): WalkResult {
+    private walkDirectives(directives: ParsedDirective[]): WalkResult {
         const stack: { opener: string; current: string; type: DirectiveType; level: number }[] = [];
         const elseifStack: { name: string; type: DirectiveType }[] = [];
         const labels: DirectiveLabel[] = [];
-        let activePath: string[] = [];
+        const checkpoints: PathCheckpoint[] = [];
 
         for (const { line, type, name } of directives) {
-            // An #endif on the cursor line still leaves the cursor inside the block it closes
-            const reachedByCursor = type === 'endif' ? line < cursorLine : line <= cursorLine;
-
             if (type === 'ifdef' || type === 'ifndef' || type === 'if') {
                 const level = stack.length;
                 const isNegated = type === 'ifndef' || name.startsWith('!');
@@ -218,12 +226,46 @@ export class IfdefDecorationProvider {
                 );
             }
 
-            if (reachedByCursor) {
-                activePath = stack.map(item => item.current);
+            checkpoints.push({ line, isEndif: type === 'endif', path: stack.map(item => item.current) });
+        }
+
+        return { labels, checkpoints };
+    }
+
+    private analyze(document: vscode.TextDocument): DocumentAnalysis {
+        const cached = this.analyses.get(document);
+        if (cached?.version === document.version) {
+            return cached;
+        }
+
+        const analysis: DocumentAnalysis = {
+            version: document.version,
+            ...this.walkDirectives(this.parseDirectives(document))
+        };
+        this.analyses.set(document, analysis);
+        return analysis;
+    }
+
+    private activePathAt(checkpoints: PathCheckpoint[], cursorLine: number): readonly string[] {
+        // Index of the last checkpoint on or before the cursor line
+        let low = 0;
+        let high = checkpoints.length;
+        while (low < high) {
+            const mid = (low + high) >>> 1;
+            if ((checkpoints[mid]?.line ?? Infinity) <= cursorLine) {
+                low = mid + 1;
+            } else {
+                high = mid;
             }
         }
 
-        return { labels, activePath };
+        // An #endif on the cursor line still leaves the cursor inside the block it closes
+        let index = low - 1;
+        while (index >= 0 && checkpoints[index]?.line === cursorLine && checkpoints[index]?.isEndif) {
+            index--;
+        }
+
+        return checkpoints[index]?.path ?? [];
     }
 
     private pathOf(stack: { current: string }[]): string {
@@ -245,7 +287,7 @@ export class IfdefDecorationProvider {
         });
     }
 
-    private applyActivePath(path: string[]) {
+    private applyActivePath(path: readonly string[]) {
         const fullPath = path.length > 0 ? path.join('->') : '<None>';
         log.debug(DebugModule.Decorations, `IFDEF Path, activePath: ${path}, full path: ${fullPath}`);
         this.statusBarItem.text = `IFDEF Path: ${fullPath}`;
@@ -266,18 +308,18 @@ export class IfdefDecorationProvider {
         );
         this.previousCursorLine = cursorPosition.line;
 
-        const directives = this.parseDirectives(editor.document);
-        this.applyActivePath(this.walkDirectives(directives, cursorPosition.line).activePath);
+        const { checkpoints } = this.analyze(editor.document);
+        this.applyActivePath(this.activePathAt(checkpoints, cursorPosition.line));
     }
 
-    /** Re-parse and re-render immediately. For edits, prefer the debounced onDocumentChanged. */
+    /** Re-render immediately. For edits, prefer the debounced onDocumentChanged. */
     refresh(editor: vscode.TextEditor) {
         const cursorLine = editor.selection.active.line;
-        const { labels, activePath } = this.walkDirectives(this.parseDirectives(editor.document), cursorLine);
+        const { labels, checkpoints } = this.analyze(editor.document);
 
         this.renderDecorations(editor, labels);
         this.previousCursorLine = cursorLine;
-        this.applyActivePath(activePath);
+        this.applyActivePath(this.activePathAt(checkpoints, cursorLine));
     }
 
     /**
