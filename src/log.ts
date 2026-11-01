@@ -3,6 +3,7 @@ import * as vscode from 'vscode';
 export enum DebugModule {
     Folding = 1 << 0,
     Decorations = 1 << 1,
+    Directives = 1 << 2,
 }
 
 let logger: vscode.LogOutputChannel | undefined;

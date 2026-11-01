@@ -1,42 +1,8 @@
 import * as vscode from 'vscode';
+import { activePathAt, DirectiveLabel } from './directives';
+import { getDocumentAnalysis } from './documentAnalysis';
 import * as log from './log';
 import { DebugModule } from './log';
-
-const directiveTypes = [
-    'ifdef', 'ifndef', 'if', 'elseif', 'elifdef', 'elifndef', 'elif', 'else', 'endif'
-] as const;
-type DirectiveType = typeof directiveTypes[number];
-
-function isDirectiveType(value: string): value is DirectiveType {
-    return (directiveTypes as readonly string[]).includes(value);
-}
-
-interface ParsedDirective {
-    line: number;
-    type: DirectiveType;
-    name: string;
-}
-
-interface DirectiveLabel {
-    line: number;
-    label: string;
-    level: number;
-}
-
-interface PathCheckpoint {
-    line: number;
-    isEndif: boolean;
-    path: readonly string[];
-}
-
-interface WalkResult {
-    labels: DirectiveLabel[];
-    checkpoints: PathCheckpoint[];
-}
-
-interface DocumentAnalysis extends WalkResult {
-    version: number;
-}
 
 const renderDebounceMs = 150;
 
@@ -46,7 +12,6 @@ export class IfdefDecorationProvider {
     private statusBarItem: vscode.StatusBarItem;
     private previousCursorLine: number | undefined;
     private pendingRenders = new Map<string, ReturnType<typeof setTimeout>>();
-    private analyses = new WeakMap<vscode.TextDocument, DocumentAnalysis>();
     private selectionListener: vscode.Disposable;
 
     constructor() {
@@ -75,56 +40,6 @@ export class IfdefDecorationProvider {
         ] as const;
 
         return colors[level % colors.length] ?? colors[0];
-    }
-
-    private stripComments(name: string): string {
-        const withoutBlock = name.replace(/\/\*.*?\*\//g, '');
-        const withoutUnclosedBlock = withoutBlock.split('/*')[0] ?? '';
-        return withoutUnclosedBlock.replace(/\/\/.*$/, '').trim();
-    }
-
-    /** Strips each `defined()` for display */
-    private unwrapDefinedExpressions(name: string): string {
-        return name.replace(
-            /(?<![A-Za-z0-9_])defined\(\s*([A-Za-z_]\w*)\s*\)/g,
-            '$1'
-        );
-    }
-
-    /** Negates a condition for display; anything other than a single name is bracketed */
-    private negateCondition(condition: string): string {
-        const negatedName = /^!\s*(\w+)$/.exec(condition);
-        if (negatedName?.[1]) {
-            return negatedName[1];
-        }
-        return /^\w+$/.test(condition) ? `!${condition}` : `!(${condition})`;
-    }
-
-    private parseDirectives(document: vscode.TextDocument): ParsedDirective[] {
-        const pattern = /^[ \t]*#[ \t]*(ifdef|ifndef|if|elseif|elifdef|elifndef|elif|else|endif)\b([^\r\n]*)/gm;
-        const directives: ParsedDirective[] = [];
-
-        for (const match of document.getText().matchAll(pattern)) {
-            const rawType = match[1] ?? '';
-            if (!isDirectiveType(rawType)) {
-                continue;
-            }
-
-            const line = document.positionAt(match.index).line;
-            let name = (match[2] ?? '').trim();
-
-            name = this.stripComments(name);
-            name = this.unwrapDefinedExpressions(name);
-
-            const needsCondition = rawType !== 'else' && rawType !== 'endif';
-            if (needsCondition && !name) {
-                continue;
-            }
-
-            directives.push({ line, type: rawType, name });
-        }
-
-        return directives;
     }
 
     private buildDecoration(
@@ -160,127 +75,6 @@ export class IfdefDecorationProvider {
                 `Nesting level ${level} exceeds supported depth (${decorations.length}); decoration skipped`
             );
         }
-    }
-
-    private walkDirectives(directives: ParsedDirective[]): WalkResult {
-        const stack: { opener: string; current: string; type: DirectiveType; level: number }[] = [];
-        const elseifStack: { name: string; type: DirectiveType }[] = [];
-        const labels: DirectiveLabel[] = [];
-        const checkpoints: PathCheckpoint[] = [];
-
-        for (const { line, type, name } of directives) {
-            if (type === 'ifdef' || type === 'ifndef' || type === 'if') {
-                const level = stack.length;
-                const displayName = type === 'ifndef' ? this.negateCondition(name) : name;
-                stack.push({ opener: displayName, current: displayName, type, level });
-                elseifStack.push({ name: displayName, type });
-                labels.push({ line, label: displayName, level });
-                log.trace(
-                    DebugModule.Decorations,
-                    `Found #${type}: ${displayName} at line ${line}, full path: ${this.pathOf(stack)}`
-                );
-            } else if (type === 'elseif' || type === 'elif' || type === 'elifdef' || type === 'elifndef') {
-                const lastItem = stack[stack.length - 1];
-                if (!lastItem) {
-                    log.warning(
-                        DebugModule.Decorations,
-                        `#${type} found without matching opening directive at line ${line}`
-                    );
-                    continue;
-                }
-                const displayName = type === 'elifndef' ? this.negateCondition(name) : name;
-                lastItem.current = displayName;
-                lastItem.type = type;
-                elseifStack.push({ name: displayName, type });
-                labels.push({ line, label: displayName, level: lastItem.level });
-                log.trace(
-                    DebugModule.Decorations,
-                    `Found #${type}: ${displayName} at line ${line}, full path: ${this.pathOf(stack)}`
-                );
-            } else if (type === 'else') {
-                const start = stack[stack.length - 1];
-                if (!start) {
-                    continue;
-                }
-                // Negate the opening condition so a stray second
-                // #else cannot negate twice and flip the label back
-                start.current = this.negateCondition(start.opener);
-                labels.push({ line, label: start.current, level: start.level });
-                log.trace(
-                    DebugModule.Decorations,
-                    `Found #else: ${start.current} at line ${line}, full path: ${this.pathOf(stack)}`
-                );
-            } else {
-                const start = stack.pop();
-                if (!start) {
-                    continue;
-                }
-                const fullPath = stack.map(item => item.current).concat(start.current).join('->');
-                let combinedPath = '';
-                while (elseifStack.length > 0) {
-                    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                    const elseifOwner = elseifStack.pop()!;
-                    combinedPath = combinedPath ? `${elseifOwner.name} & ${combinedPath}` : elseifOwner.name;
-                    if (
-                        elseifStack.length === 0 ||
-                        elseifOwner.type === 'ifdef' ||
-                        elseifOwner.type === 'ifndef' ||
-                        elseifOwner.type === 'if'
-                    ) {
-                        break;
-                    }
-                }
-                labels.push({ line, label: combinedPath, level: start.level });
-                log.trace(
-                    DebugModule.Decorations,
-                    `Found #endif: ${combinedPath} at line ${line}, full path: ${fullPath}`
-                );
-            }
-
-            checkpoints.push({ line, isEndif: type === 'endif', path: stack.map(item => item.current) });
-        }
-
-        return { labels, checkpoints };
-    }
-
-    private analyze(document: vscode.TextDocument): DocumentAnalysis {
-        const cached = this.analyses.get(document);
-        if (cached?.version === document.version) {
-            return cached;
-        }
-
-        const analysis: DocumentAnalysis = {
-            version: document.version,
-            ...this.walkDirectives(this.parseDirectives(document))
-        };
-        this.analyses.set(document, analysis);
-        return analysis;
-    }
-
-    private activePathAt(checkpoints: PathCheckpoint[], cursorLine: number): readonly string[] {
-        // Index of the last checkpoint on or before the cursor line
-        let low = 0;
-        let high = checkpoints.length;
-        while (low < high) {
-            const mid = (low + high) >>> 1;
-            if ((checkpoints[mid]?.line ?? Infinity) <= cursorLine) {
-                low = mid + 1;
-            } else {
-                high = mid;
-            }
-        }
-
-        // An #endif on the cursor line still leaves the cursor inside the block it closes
-        let index = low - 1;
-        while (index >= 0 && checkpoints[index]?.line === cursorLine && checkpoints[index]?.isEndif) {
-            index--;
-        }
-
-        return checkpoints[index]?.path ?? [];
-    }
-
-    private pathOf(stack: { current: string }[]): string {
-        return stack.map(item => item.current).join('->');
     }
 
     private renderDecorations(editor: vscode.TextEditor, labels: DirectiveLabel[]) {
@@ -319,18 +113,18 @@ export class IfdefDecorationProvider {
         );
         this.previousCursorLine = cursorPosition.line;
 
-        const { checkpoints } = this.analyze(editor.document);
-        this.applyActivePath(this.activePathAt(checkpoints, cursorPosition.line));
+        const { checkpoints } = getDocumentAnalysis(editor.document);
+        this.applyActivePath(activePathAt(checkpoints, cursorPosition.line));
     }
 
     /** Re-render immediately. For edits, prefer the debounced onDocumentChanged. */
     refresh(editor: vscode.TextEditor) {
         const cursorLine = editor.selection.active.line;
-        const { labels, checkpoints } = this.analyze(editor.document);
+        const { labels, checkpoints } = getDocumentAnalysis(editor.document);
 
         this.renderDecorations(editor, labels);
         this.previousCursorLine = cursorLine;
-        this.applyActivePath(this.activePathAt(checkpoints, cursorLine));
+        this.applyActivePath(activePathAt(checkpoints, cursorLine));
     }
 
     /**

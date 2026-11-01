@@ -1,6 +1,8 @@
 import * as vscode from 'vscode';
 import { IfdefFoldingProvider } from './FoldingProvider';
 import { IfdefDecorationProvider } from './decorationProvider';
+import { findSection } from './directives';
+import { getDocumentAnalysis } from './documentAnalysis';
 import { getLogger } from './log';
 
 export function activate(context: vscode.ExtensionContext) {
@@ -49,12 +51,10 @@ export function activate(context: vscode.ExtensionContext) {
     disposable = vscode.commands.registerCommand('extension.collapseIfdefsInSection', () => {
         const editor = vscode.window.activeTextEditor;
         if (editor) {
-            const position = editor.selection.active;
-            const line = position.line;
-            const { startLine, endLine } = findIfdefSection(editor, line);
-            if (startLine !== undefined && endLine !== undefined) {
-                editor.revealRange(new vscode.Range(startLine, 0, endLine, 0));
-                vscode.commands.executeCommand('editor.fold', { selectionLines: [startLine], levels: 1 });
+            const section = findSection(getDocumentAnalysis(editor.document).blocks, editor.selection.active.line);
+            if (section) {
+                editor.revealRange(new vscode.Range(section.startLine, 0, section.endLine, 0));
+                vscode.commands.executeCommand('editor.fold', { selectionLines: [section.startLine], levels: 1 });
             }
         }
     });
@@ -69,58 +69,4 @@ export function activate(context: vscode.ExtensionContext) {
     if (vscode.window.activeTextEditor) {
         decorationProvider.refresh(vscode.window.activeTextEditor);
     }
-}
-
-const preprocessorOpenPattern = /^[ \t]*#[ \t]*(?:ifdef|ifndef|if)\b/;
-const preprocessorBranchPattern = /^[ \t]*#[ \t]*(?:else|elseif|elifdef|elifndef|elif)\b/;
-const preprocessorEndifPattern = /^[ \t]*#[ \t]*endif\b/;
-
-/**
- * Innermost `#if` block containing `line`. If the cursor is on an `#else` / `#elif` branch,
- * the range starts at that branch (matching fold regions), not at the opening `#if`.
- */
-function findIfdefSection(editor: vscode.TextEditor, line: number): { startLine?: number; endLine?: number } {
-    const openStack: number[] = [];
-
-    for (let i = 0; i <= line; i++) {
-        const text = editor.document.lineAt(i).text;
-        if (preprocessorOpenPattern.test(text)) {
-            openStack.push(i);
-        } else if (i < line && preprocessorEndifPattern.test(text)) {
-            openStack.pop();
-        }
-    }
-
-    const blockOpenLine = openStack[openStack.length - 1];
-    if (blockOpenLine === undefined) {
-        return {};
-    }
-
-    let depth = 0;
-    let endLine: number | undefined;
-    let branchStart: number | undefined;
-
-    for (let i = blockOpenLine; i < editor.document.lineCount; i++) {
-        const text = editor.document.lineAt(i).text;
-        if (preprocessorOpenPattern.test(text)) {
-            depth++;
-        } else if (preprocessorBranchPattern.test(text)) {
-            if (depth === 1 && i <= line) {
-                branchStart = i;
-            }
-        } else if (preprocessorEndifPattern.test(text)) {
-            depth--;
-            if (depth === 0) {
-                endLine = i;
-                break;
-            }
-        }
-    }
-
-    if (endLine === undefined) {
-        return { startLine: branchStart ?? blockOpenLine };
-    }
-
-    const startLine = branchStart ?? blockOpenLine;
-    return { startLine, endLine };
 }
