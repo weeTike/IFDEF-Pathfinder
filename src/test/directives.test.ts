@@ -1,5 +1,6 @@
 import * as assert from 'assert';
-import { activePathAt, analyzeDirectives, findSection, negateCondition, parseDirectives } from '../directives';
+import { formatCondition } from '../condition';
+import { activePathAt, analyzeDirectives, findSection, parseDirectives } from '../directives';
 
 /** Each label next to its directive, e.g. `#else -> !A` */
 function labels(...lines: string[]): string[] {
@@ -30,24 +31,6 @@ function sections(...lines: string[]): string[] {
         return section ? `${section.startLine}-${section.endLine}` : 'none';
     });
 }
-
-describe('negateCondition', () => {
-    const cases: [string, string][] = [
-        ['A', '!A'],
-        ['!A', 'A'],
-        ['! A', 'A'],
-        ['0', '!0'],
-        ['A && B', '!(A && B)'],
-        ['!A || B', '!(!A || B)'],
-        ['(A) && (B)', '!((A) && (B))'],
-        ['FOO(1)', '!(FOO(1))'],
-    ];
-    for (const [condition, expected] of cases) {
-        it(`negates ${condition} as ${expected}`, () => {
-            assert.strictEqual(negateCondition(condition), expected);
-        });
-    }
-});
 
 describe('parseDirectives', () => {
     it('recognises every directive type', () => {
@@ -97,7 +80,7 @@ describe('parseDirectives', () => {
             const text = ['#if defined(A) && \\', '    defined(B) \\  ', '    || C', 'x', '#endif'].join(separator);
             assert.deepStrictEqual(
                 parseDirectives(text).map(({ line, endLine, condition }) => [line, endLine, condition]),
-                [[0, 2, 'A && B || C'], [4, 4, '']]
+                [[0, 2, 'defined(A) && defined(B) || C'], [4, 4, '']]
             );
         }
     });
@@ -131,9 +114,7 @@ describe('parseDirectives', () => {
         ['#if A // comment', 'A'],
         ['#if A /* comment */', 'A'],
         ['#if A /* unclosed comment', 'A'],
-        ['#if defined(A) && defined( B )', 'A && B'],
-        ['#if defined A', 'defined A'],
-        ['#if isdefined(A)', 'isdefined(A)'],
+        ['#if defined(A)  &&  defined( B )', 'defined(A) && defined( B )'],
     ];
     for (const [line, expected] of conditions) {
         it(`reads the condition of "${line}" as "${expected}"`, () => {
@@ -165,8 +146,22 @@ describe('labels', () => {
         assert.deepStrictEqual(labels('#if A', '#else', '#endif'), ['#if A -> A', '#else -> !A', '#endif -> A']);
         assert.deepStrictEqual(labels('#ifndef A', '#else', '#endif')[1], '#else -> A');
         assert.deepStrictEqual(labels('#if A && B', '#else', '#endif')[1], '#else -> !(A && B)');
-        assert.deepStrictEqual(labels('#if !A || B', '#else', '#endif')[1], '#else -> !(!A || B)');
+        assert.deepStrictEqual(labels('#if !A || B', '#else', '#endif')[1], '#else -> A && !B');
     });
+
+    const conditions: [string, string][] = [
+        ['#if defined(A) && defined( B )', 'A && B'],
+        ['#if defined A', 'A'],
+        ['#if(A)', 'A'],
+        ['#if isdefined(A)', 'isdefined(A)'],
+        ['#if A || B && C', 'A || (B && C)'],
+        ['#ifdef A B', 'A B'],
+    ];
+    for (const [line, expected] of conditions) {
+        it(`labels "${line}" as "${expected}"`, () => {
+            assert.strictEqual(analyzeDirectives(line).labels[0]?.label, expected);
+        });
+    }
 
     it('does not flip the label back on a second #else', () => {
         assert.deepStrictEqual(
@@ -175,19 +170,24 @@ describe('labels', () => {
         );
     });
 
-    it('labels #elif branches and lists the whole chain on #endif', () => {
+    it('labels #elif with its own condition, #else with every earlier branch negated, #endif with the opener', () => {
         assert.deepStrictEqual(
             labels('#if A', '#elif B', '#elifdef C', '#elifndef D', '#elifndef E && F', '#else', '#endif'),
             ['#if A -> A', '#elif B -> B', '#elifdef C -> C', '#elifndef D -> !D', '#elifndef E && F -> !(E && F)',
-                '#else -> !A', '#endif -> A & B & C & !D & !(E && F)']
+                '#else -> !A && !B && !C && D && E && F', '#endif -> A']
         );
     });
 
     it('keeps an inner #endif label to its own block', () => {
         assert.deepStrictEqual(
             labels('#if A', '#if B', '#elif C', '#endif', '#endif'),
-            ['#if A -> A', '#if B -> B', '#elif C -> C', '#endif -> B & C', '#endif -> A']
+            ['#if A -> A', '#if B -> B', '#elif C -> C', '#endif -> B', '#endif -> A']
         );
+    });
+
+    it('shows the #else branch of a chain in the path', () => {
+        assert.deepStrictEqual(paths('#if A', '#elif B', '#else', 'x', '#endif'), ['A', 'B', '!A && !B', '!A && !B',
+            '!A && !B']);
     });
 
     it('gives nested blocks increasing levels', () => {
@@ -247,8 +247,8 @@ describe('#endif comments', () => {
         });
     }
 
-    it('matches the whole #elif chain', () => {
-        assert.strictEqual(matches('#if A', '#elif B', '#endif // A & B'), true);
+    it('matches the negated opener', () => {
+        assert.strictEqual(matches('#if A && B', '#endif // !(A && B)'), true);
     });
 
     const unnamed: [string, string][] = [
@@ -279,7 +279,7 @@ describe('include guards', () => {
 
     it('finds the guard and leaves it in folding and blocks', () => {
         const analysis = analyzeDirectives(header.join('\n'));
-        assert.deepStrictEqual(analysis.includeGuard, { openLine: 3, branchLines: [], endLine: 8 });
+        assert.deepStrictEqual([analysis.includeGuard?.openLine, analysis.includeGuard?.endLine], [3, 8]);
         assert.strictEqual(analysis.blocks.length, 2);
         assert.strictEqual(analysis.foldRanges.length, 2);
     });
@@ -309,12 +309,30 @@ describe('include guards', () => {
         ['an #ifdef', ['#ifdef X', '#define X', '#endif']],
         ['a compound condition', ['#if !X && Y', '#define X', '#endif']],
         ['an unclosed block', ['#ifndef X', '#define X']],
+        ['a stray #endif first', ['#endif', '#ifndef X', '#define X', '#endif']],
     ];
     for (const [reason, lines] of notGuards) {
         it(`does not treat a file with ${reason} as guarded`, () => {
             assert.strictEqual(analyzeDirectives(lines.join('\n')).includeGuard, undefined);
         });
     }
+});
+
+describe('blocks', () => {
+    it('gives each branch the condition under which it is compiled', () => {
+        const [block] = analyzeDirectives(['#if A', '#elif B || C', '#elif D', '#else', '#endif'].join('\n')).blocks;
+        assert.deepStrictEqual(
+            block?.branches.map(({ type, effective }) => `${type}: ${formatCondition(effective)}`),
+            ['if: A', 'elif: !A && (B || C)', 'elif: !A && !B && !C && D', 'else: !A && !B && !C && !D']
+        );
+    });
+
+    it('links nested blocks to their parent', () => {
+        const [outer, inner, next] = analyzeDirectives('#if A\n#if B\n#endif\n#endif\n#if C\n#endif').blocks;
+        assert.deepStrictEqual([outer?.depth, inner?.depth, next?.depth], [0, 1, 0]);
+        assert.strictEqual(inner?.parent, outer);
+        assert.strictEqual(next?.parent, undefined);
+    });
 });
 
 describe('activePathAt', () => {

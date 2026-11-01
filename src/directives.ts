@@ -3,6 +3,8 @@
  * shared by every feature and tested without launching VS Code.
  */
 
+import { allOf, Condition, formatCondition, negateCondition, parseCondition } from './condition';
+
 const directiveTypes = [
     'ifdef', 'ifndef', 'if', 'elseif', 'elifdef', 'elifndef', 'elif', 'else', 'endif'
 ] as const;
@@ -15,6 +17,7 @@ export interface Directive {
     /** Last line of the directive, which differs from `line` when lines are continued with `\` */
     endLine: number;
     type: DirectiveType;
+    /** Text after the directive name, without comments */
     condition: string;
     comment: string;
     /** Column of the `#` */
@@ -38,10 +41,24 @@ export interface PathCheckpoint {
     path: readonly string[];
 }
 
+export interface Branch {
+    line: number;
+    endLine: number;
+    type: DirectiveType;
+    /** Condition written on the directive. `#else` has none. */
+    condition?: Condition;
+    /** Condition under which the branch is compiled: its own condition and the negation of every earlier one */
+    effective: Condition;
+}
+
 export interface ConditionalBlock {
     openLine: number;
-    branchLines: number[];
+    /** The opening directive followed by each `#elif` and `#else` */
+    branches: Branch[];
     endLine?: number;
+    /** Number of blocks this one is nested in */
+    depth: number;
+    parent?: ConditionalBlock;
 }
 
 export interface FoldRange {
@@ -98,26 +115,6 @@ export function extractComment(text: string): string {
     return comments.join(' ');
 }
 
-/** Strips each `defined()` for display */
-export function unwrapDefinedExpressions(condition: string): string {
-    return condition.replace(
-        /(?<![A-Za-z0-9_])defined\(\s*([A-Za-z_]\w*)\s*\)/g,
-        '$1'
-    );
-}
-
-/** Negates a condition for display; anything other than a single name is bracketed */
-export function negateCondition(condition: string): string {
-    if (!condition) {
-        return condition;
-    }
-    const negatedName = /^!\s*(\w+)$/.exec(condition);
-    if (negatedName?.[1]) {
-        return negatedName[1];
-    }
-    return /^\w+$/.test(condition) ? `!${condition}` : `!(${condition})`;
-}
-
 /** Offset of the end of the line containing `offset`, before any `\r\n` or `\n` */
 function lineEndAt(text: string, offset: number): number {
     const newline = text.indexOf('\n', offset);
@@ -161,7 +158,7 @@ export function parseDirectives(text: string): Directive[] {
 
         const keywordStart = match[0].indexOf('#');
         const keywordEnd = match[0].length - (match[2]?.length ?? 0);
-        const condition = unwrapDefinedExpressions(stripComments(rest.trim()).replace(/\s+/g, ' '));
+        const condition = stripComments(rest).replace(/\s+/g, ' ');
         directives.push({ line, endLine, type, condition, comment: extractComment(rest), keywordStart, keywordEnd });
         line = endLine;
     }
@@ -169,71 +166,80 @@ export function parseDirectives(text: string): Directive[] {
     return directives;
 }
 
-/** Normalises a condition so that `defined(A)`, `defined A` and `A` compare equal */
-function normaliseCondition(condition: string): string {
-    return unwrapDefinedExpressions(condition).replace(/(?<![A-Za-z0-9_])defined\s+/g, '').replace(/\s+/g, '');
+/** Condition written on a directive other than `#else` / `#endif`, with `#ifdef X` read as `defined(X)` */
+function ownCondition({ type, condition }: Directive): Condition {
+    const isNameTest = type === 'ifdef' || type === 'ifndef' || type === 'elifdef' || type === 'elifndef';
+    const parsed: Condition = isNameTest && /^\w+$/.test(condition)
+        ? { kind: 'defined', name: condition }
+        : parseCondition(condition);
+    return type === 'ifndef' || type === 'elifndef' ? negateCondition(parsed) : parsed;
 }
 
-/** Whether the text after `#endif` names the condition of the block it closes */
-function namesCondition(endif: Directive, conditions: string[]): boolean {
-    const names = conditions.filter(condition => condition).map(normaliseCondition);
-    return [endif.comment, endif.condition].some(text => text && names.includes(normaliseCondition(text)));
+/** Text shown for a branch: its own condition, or for `#else` the negation of every earlier branch */
+function branchLabel(branch: Branch): string {
+    return formatCondition(branch.condition ?? branch.effective);
 }
 
-function walkLabels(directives: Directive[]): Pick<DirectiveAnalysis, 'labels' | 'checkpoints'> {
-    const stack: { condition: string; opener: string; current: string; level: number }[] = [];
-    const elseifStack: { name: string; type: DirectiveType }[] = [];
+/** Whether the text after `#endif` names the condition of the block it closes, either way round */
+function namesCondition(endif: Directive, condition: Condition): boolean {
+    const names = [condition, negateCondition(condition)].map(formatCondition).filter(name => name);
+    return [endif.comment, endif.condition].some(text => text && names.includes(formatCondition(parseCondition(text))));
+}
+
+function walkLabels(
+    directives: readonly Directive[],
+    blocks: readonly ConditionalBlock[],
+    ignored: ConditionalBlock | undefined
+): Pick<DirectiveAnalysis, 'labels' | 'checkpoints'> {
+    // Matches each directive to its block in the same order that `buildBlocks` created them
+    const stack: { block: ConditionalBlock; branch: number; label: string }[] = [];
+    let nextBlock = 0;
+    // An ignored include guard encloses every other block
+    const levelOffset = ignored ? 1 : 0;
     const labels: DirectiveLabel[] = [];
     const checkpoints: PathCheckpoint[] = [];
 
     for (const directive of directives) {
-        const { line, endLine, type, condition } = directive;
+        const { line, endLine, type } = directive;
 
+        let entry: typeof stack[number] | undefined;
         if (isOpener(type)) {
-            const level = stack.length;
-            const displayName = type === 'ifndef' ? negateCondition(condition) : condition;
-            stack.push({ condition, opener: displayName, current: displayName, level });
-            elseifStack.push({ name: displayName, type });
-            labels.push({ line, endLine, label: displayName, level, hasMatchingComment: false });
-        } else if (type === 'else') {
-            const start = stack[stack.length - 1];
-            if (!start) {
-                continue;
+            const block = blocks[nextBlock++];
+            entry = block && { block, branch: 0, label: '' };
+            if (entry) {
+                stack.push(entry);
             }
-            // Negate the opening condition so a stray second
-            // #else cannot negate twice and flip the label back
-            start.current = negateCondition(start.opener);
-            labels.push({ line, endLine, label: start.current, level: start.level, hasMatchingComment: false });
         } else if (type === 'endif') {
-            const start = stack.pop();
-            if (!start) {
-                continue;
-            }
-            let combinedPath = '';
-            while (elseifStack.length > 0) {
-                // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-                const elseifOwner = elseifStack.pop()!;
-                if (elseifOwner.name) {
-                    combinedPath = combinedPath ? `${elseifOwner.name} & ${combinedPath}` : elseifOwner.name;
-                }
-                if (elseifStack.length === 0 || isOpener(elseifOwner.type)) {
-                    break;
-                }
-            }
-            const hasMatchingComment = namesCondition(directive, [start.condition, start.opener, combinedPath]);
-            labels.push({ line, endLine, label: combinedPath, level: start.level, hasMatchingComment });
+            entry = stack.pop();
         } else {
-            const lastItem = stack[stack.length - 1];
-            if (!lastItem) {
-                continue;
+            entry = stack[stack.length - 1];
+            if (entry) {
+                entry.branch++;
             }
-            const displayName = type === 'elifndef' ? negateCondition(condition) : condition;
-            lastItem.current = displayName;
-            elseifStack.push({ name: displayName, type });
-            labels.push({ line, endLine, label: displayName, level: lastItem.level, hasMatchingComment: false });
         }
 
-        checkpoints.push({ line, isEndif: type === 'endif', path: stack.map(item => item.current) });
+        const opener = entry?.block.branches[0];
+        const branch = entry?.block.branches[entry.branch];
+        if (!entry || !opener || !branch) {
+            continue;
+        }
+
+        if (type === 'endif') {
+            if (entry.block !== ignored) {
+                const hasMatchingComment = namesCondition(directive, opener.effective);
+                const level = entry.block.depth - levelOffset;
+                labels.push({ line, endLine, label: formatCondition(opener.effective), level, hasMatchingComment });
+            }
+        } else {
+            entry.label = branchLabel(branch);
+            if (entry.block !== ignored) {
+                const level = entry.block.depth - levelOffset;
+                labels.push({ line, endLine, label: entry.label, level, hasMatchingComment: false });
+            }
+        }
+
+        const path = stack.filter(item => item.block !== ignored).map(item => item.label);
+        checkpoints.push({ line, isEndif: type === 'endif', path });
     }
 
     return { labels, checkpoints };
@@ -241,11 +247,11 @@ function walkLabels(directives: Directive[]): Pick<DirectiveAnalysis, 'labels' |
 
 /** First line of the block's latest branch, which is where its current fold region starts */
 function currentSectionStart(block: ConditionalBlock): number {
-    return block.branchLines[block.branchLines.length - 1] ?? block.openLine;
+    return block.branches[block.branches.length - 1]?.line ?? block.openLine;
 }
 
-function walkBlocks(
-    directives: Directive[],
+function buildBlocks(
+    directives: readonly Directive[],
     lineCount: number
 ): Pick<DirectiveAnalysis, 'blocks' | 'foldRanges' | 'warnings'> {
     const open: ConditionalBlock[] = [];
@@ -253,9 +259,16 @@ function walkBlocks(
     const foldRanges: FoldRange[] = [];
     const warnings: DirectiveWarning[] = [];
 
-    for (const { line, type } of directives) {
+    for (const directive of directives) {
+        const { line, endLine, type } = directive;
         if (isOpener(type)) {
-            const block: ConditionalBlock = { openLine: line, branchLines: [] };
+            const condition = ownCondition(directive);
+            const block: ConditionalBlock = {
+                openLine: line,
+                branches: [{ line, endLine, type, condition, effective: condition }],
+                depth: open.length,
+                parent: open[open.length - 1],
+            };
             open.push(block);
             blocks.push(block);
         } else if (isBranch(type)) {
@@ -265,7 +278,12 @@ function walkBlocks(
                 continue;
             }
             foldRanges.push({ start: currentSectionStart(block), end: line - 1 });
-            block.branchLines.push(line);
+
+            const condition = type === 'else' ? undefined : ownCondition(directive);
+            // `#else` branches add nothing here, so a stray second `#else` gets the same condition as the first
+            const earlier = block.branches.flatMap(item => item.condition ? [negateCondition(item.condition)] : []);
+            const effective = allOf(condition ? [...earlier, condition] : earlier);
+            block.branches.push({ line, endLine, type, condition, effective });
         } else {
             const block = open.pop();
             if (!block) {
@@ -300,13 +318,14 @@ function findIncludeGuard(
 ): ConditionalBlock | undefined {
     const opener = directives[0];
     const block = blocks[0];
-    if (!opener || block?.endLine === undefined || block.branchLines.length > 0) {
+    const condition = block?.branches[0]?.condition;
+    if (!opener || opener.line !== block?.openLine || block.endLine === undefined || block.branches.length > 1
+        || condition?.kind !== 'not') {
         return undefined;
     }
 
-    const name = opener.type === 'ifndef'
-        ? /^(\w+)$/.exec(opener.condition)?.[1]
-        : opener.type === 'if' ? /^!\s*(?:defined\s+)?(\w+)$/.exec(opener.condition)?.[1] : undefined;
+    const { operand } = condition;
+    const name = operand.kind === 'defined' || operand.kind === 'name' ? operand.name : undefined;
     if (!name || directives[directives.length - 1]?.line !== block.endLine) {
         return undefined;
     }
@@ -323,13 +342,10 @@ function findIncludeGuard(
 export function analyzeDirectives(text: string, options: AnalysisOptions = {}): DirectiveAnalysis {
     const directives = parseDirectives(text);
     const lines = text.split('\n');
-    const blockAnalysis = walkBlocks(directives, lines.length);
+    const blockAnalysis = buildBlocks(directives, lines.length);
     const includeGuard = findIncludeGuard(directives, blockAnalysis.blocks, lines);
-
-    const labelled = options.ignoreIncludeGuards && includeGuard
-        ? directives.filter(({ line }) => line !== includeGuard.openLine && line !== includeGuard.endLine)
-        : directives;
-    return { ...walkLabels(labelled), ...blockAnalysis, includeGuard };
+    const ignored = options.ignoreIncludeGuards ? includeGuard : undefined;
+    return { ...walkLabels(directives, blockAnalysis.blocks, ignored), ...blockAnalysis, includeGuard };
 }
 
 /** Conditions in effect on `line`. An `#endif` on that line still counts as inside the block it closes. */
@@ -376,6 +392,6 @@ export function findSection(
         return undefined;
     }
 
-    const branchStart = innermost.branchLines.filter(branchLine => branchLine <= line).pop();
+    const branchStart = innermost.branches.filter(branch => branch.line <= line).pop()?.line;
     return { startLine: branchStart ?? innermost.openLine, endLine: innermost.endLine };
 }
