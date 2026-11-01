@@ -89,6 +89,15 @@ export class IfdefDecorationProvider {
         );
     }
 
+    /** Negates a condition for display; anything other than a single name is bracketed */
+    private negateCondition(condition: string): string {
+        const negatedName = /^!\s*(\w+)$/.exec(condition);
+        if (negatedName?.[1]) {
+            return negatedName[1];
+        }
+        return /^\w+$/.test(condition) ? `!${condition}` : `!(${condition})`;
+    }
+
     private parseDirectives(document: vscode.TextDocument): ParsedDirective[] {
         const pattern = /^[ \t]*#(ifdef|ifndef|if|elseif|elif|else|endif)([^\r\n]*)/gm;
         const directives: ParsedDirective[] = [];
@@ -160,8 +169,7 @@ export class IfdefDecorationProvider {
         for (const { line, type, name } of directives) {
             if (type === 'ifdef' || type === 'ifndef' || type === 'if') {
                 const level = stack.length;
-                const isNegated = type === 'ifndef' || name.startsWith('!');
-                const displayName = isNegated ? `!${name.replace(/^!/, '')}` : name;
+                const displayName = type === 'ifndef' ? this.negateCondition(name) : name;
                 stack.push({ opener: displayName, current: displayName, type, level });
                 elseifStack.push({ name: displayName, type });
                 labels.push({ line, label: displayName, level });
@@ -193,7 +201,7 @@ export class IfdefDecorationProvider {
                 }
                 // Negate the opening condition so a stray second
                 // #else cannot negate twice and flip the label back
-                start.current = start.opener.startsWith('!') ? start.opener.substring(1) : `!${start.opener}`;
+                start.current = this.negateCondition(start.opener);
                 labels.push({ line, label: start.current, level: start.level });
                 log.trace(
                     DebugModule.Decorations,
