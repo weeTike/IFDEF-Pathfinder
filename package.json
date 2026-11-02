@@ -42,6 +42,11 @@
           ],
           "markdownDescription": "[Language identifiers](https://code.visualstudio.com/docs/languages/identifiers) of the files that the extension works in. Other preprocessed languages, such as `glsl` or `hlsl`, can be added."
         },
+        "ifdefPathfinder.codeLens.enabled": {
+          "type": "boolean",
+          "default": true,
+          "markdownDescription": "Shows the enclosing conditions above each nested `#if`, `#ifdef` and `#ifndef`. Clicking a condition goes to its directive."
+        },
         "ifdefPathfinder.inlineHints.directives": {
           "type": "array",
           "items": {

@@ -62,6 +62,13 @@ export interface ConditionalBlock {
     parent?: ConditionalBlock;
 }
 
+/** Branch of an enclosing block, as shown in a nesting path */
+export interface PathPart {
+    line: number;
+    type: DirectiveType;
+    label: string;
+}
+
 export interface FoldRange {
     start: number;
     end: number;
@@ -341,6 +348,18 @@ export function analyzeDirectives(text: string): DirectiveAnalysis {
     const directives = hasIncludeGuard(parsed, lines) ? parsed.slice(1, -1) : parsed;
     const blockAnalysis = buildBlocks(directives, lines.length);
     return { ...walkLabels(directives, blockAnalysis.blocks), ...blockAnalysis };
+}
+
+/** Branches of the blocks that `block` is nested in, outermost first */
+export function enclosingPath(block: ConditionalBlock): PathPart[] {
+    const path: PathPart[] = [];
+    for (let child = block, parent = block.parent; parent; child = parent, parent = parent.parent) {
+        const branch = parent.branches.filter(item => item.line < child.openLine).pop();
+        if (branch) {
+            path.unshift({ line: branch.line, type: branch.type, label: branchLabel(branch) });
+        }
+    }
+    return path;
 }
 
 /** Conditions in effect on `line`. An `#endif` on that line still counts as inside the block it closes. */

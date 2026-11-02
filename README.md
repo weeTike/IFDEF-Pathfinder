@@ -36,6 +36,7 @@ With IFDEF Pathfinder, you'll boldly go where no coder has gone before!
   - `IFDEF Pathfinder: Collapse All Under This Section`
   - `IFDEF Pathfinder: Expand All`
 - The status bar shows the conditions in effect at the cursor.
+- Each nested `#if`, `#ifdef` and `#ifndef` shows the conditions of the blocks around it on the line above. Clicking a condition goes to its directive.
 - `#elif`, `#else` and `#endif` lines show their condition at the end of the line.
 
 ## Configuration
@@ -45,6 +46,7 @@ Settings are under `ifdefPathfinder` in the Settings editor:
 | Setting                              | Default                       | Description                                                                   |
 | ------------------------------------ | ----------------------------- | ----------------------------------------------------------------------------- |
 | `languages`                          | C, C++, CUDA, Objective-C/C++ | Language identifiers of the files that the extension works in.                |
+| `codeLens.enabled`                   | `true`                        | Shows the enclosing conditions above each nested opening directive.           |
 | `inlineHints.directives`             | `["elif", "else", "endif"]`   | Directives that show their condition at the end of the line.                  |
 | `inlineHints.hideWhenEndifCommented` | `true`                        | Leaves out the hint on an `#endif` whose comment already names the condition. |
 | `statusBar.enabled`                  | `true`                        | Shows the conditions in effect at the cursor in the status bar.               |

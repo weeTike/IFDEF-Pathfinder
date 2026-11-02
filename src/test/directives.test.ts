@@ -1,6 +1,6 @@
 import * as assert from 'assert';
 import { formatCondition } from '../condition';
-import { activePathAt, analyzeDirectives, findSection, parseDirectives } from '../directives';
+import { activePathAt, analyzeDirectives, enclosingPath, findSection, parseDirectives } from '../directives';
 
 /** Each label next to its directive, e.g. `#else -> !A` */
 function labels(...lines: string[]): string[] {
@@ -361,6 +361,37 @@ describe('blocks', () => {
         assert.deepStrictEqual([outer?.depth, inner?.depth, next?.depth], [0, 1, 0]);
         assert.strictEqual(inner?.parent, outer);
         assert.strictEqual(next?.parent, undefined);
+    });
+});
+
+describe('enclosingPath', () => {
+    /** Path above each opening directive, as `label@line` parts */
+    function openerPaths(...lines: string[]): string[] {
+        return analyzeDirectives(lines.join('\n')).blocks
+            .map(block => enclosingPath(block).map(({ label, line }) => `${label}@${line}`).join(' | '));
+    }
+
+    it('is empty for top level blocks', () => {
+        assert.deepStrictEqual(openerPaths('#if A', '#endif', '#ifdef B', '#endif'), ['', '']);
+    });
+
+    it('lists the branch of every enclosing block, outermost first', () => {
+        assert.deepStrictEqual(
+            openerPaths('#ifdef A', '#if B', '#else', '#if C', '#endif', '#endif', '#endif'),
+            ['', 'A@0', 'A@0 | !B@2']
+        );
+    });
+
+    it('uses the branch that contains the block', () => {
+        assert.deepStrictEqual(
+            openerPaths('#if A', '#if X', '#endif', '#elif B', '#if Y', '#endif', '#endif'),
+            ['', 'A@0', 'B@3']
+        );
+    });
+
+    it('keeps the directive type of each part', () => {
+        const [, inner] = analyzeDirectives('#ifndef A\n#elifdef B\n#if C\n#endif\n#endif').blocks;
+        assert.deepStrictEqual(inner && enclosingPath(inner).map(({ type }) => type), ['elifdef']);
     });
 });
 

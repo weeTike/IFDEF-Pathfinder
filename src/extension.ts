@@ -1,14 +1,19 @@
 import * as vscode from 'vscode';
+import { PathCodeLensProvider } from './codeLensProvider';
 import { affectsSetting, getSettings, onDidChangeSettings } from './config';
 import { IfdefFoldingProvider } from './FoldingProvider';
 import { findSection } from './directives';
 import { getDocumentAnalysis } from './documentAnalysis';
 import { EditorRenderer } from './editorRenderer';
 import { getLogger } from './log';
+import { registerNavigationCommands } from './navigation';
 
-function registerFoldingProvider(): vscode.Disposable {
+function registerLanguageProviders(codeLens: PathCodeLensProvider): vscode.Disposable {
     const selector = getSettings().languages.map(language => ({ language }));
-    return vscode.languages.registerFoldingRangeProvider(selector, new IfdefFoldingProvider());
+    return vscode.Disposable.from(
+        vscode.languages.registerFoldingRangeProvider(selector, new IfdefFoldingProvider()),
+        vscode.languages.registerCodeLensProvider(selector, codeLens)
+    );
 }
 
 /** Used by `when` clauses in package.json to show commands only for supported languages */
@@ -20,19 +25,23 @@ export function activate(context: vscode.ExtensionContext) {
     // Start the extension logger
     context.subscriptions.push(getLogger());
 
-    let foldingProvider = registerFoldingProvider();
+    const codeLens = new PathCodeLensProvider();
+    let languageProviders = registerLanguageProviders(codeLens);
     updateLanguageContext();
 
     const renderer = new EditorRenderer();
     context.subscriptions.push(
         renderer,
-        { dispose: () => foldingProvider.dispose() },
+        codeLens,
+        { dispose: () => languageProviders.dispose() },
+        registerNavigationCommands(),
         onDidChangeSettings(event => {
             if (affectsSetting(event, 'languages')) {
-                foldingProvider.dispose();
-                foldingProvider = registerFoldingProvider();
+                languageProviders.dispose();
+                languageProviders = registerLanguageProviders(codeLens);
                 updateLanguageContext();
             }
+            codeLens.refresh();
             renderer.renderAll();
         })
     );

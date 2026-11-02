@@ -8,6 +8,7 @@ export type HintDirective = 'elif' | 'else' | 'endif';
 
 export interface Settings {
     languages: readonly string[];
+    codeLensEnabled: boolean;
     inlineHintDirectives: ReadonlySet<HintDirective>;
     hideWhenEndifCommented: boolean;
     statusBarEnabled: boolean;
@@ -19,6 +20,7 @@ function readSettings(): Settings {
     const config = vscode.workspace.getConfiguration(configSection);
     return {
         languages: config.get<string[]>('languages', ['c', 'cpp']),
+        codeLensEnabled: config.get('codeLens.enabled', true),
         inlineHintDirectives: new Set(config.get<HintDirective[]>('inlineHints.directives', ['elif', 'else', 'endif'])),
         hideWhenEndifCommented: config.get('inlineHints.hideWhenEndifCommented', true),
         statusBarEnabled: config.get('statusBar.enabled', true),
