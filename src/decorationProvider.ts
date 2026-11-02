@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { getSettings, hintDirectiveOf } from './config';
 import { activePathAt, DirectiveLabel } from './directives';
 import { getDocumentAnalysis } from './documentAnalysis';
 import * as log from './log';
@@ -6,22 +7,20 @@ import { DebugModule } from './log';
 
 const renderDebounceMs = 150;
 
+/** Matches the number of `ifdefPathfinder.depthNForeground` colours in package.json */
+const depthColorCount = 6;
+
+const supportedLanguages: readonly string[] = ['c', 'cpp'];
+
 export class IfdefDecorationProvider {
 
-    private decorationTypes: vscode.TextEditorDecorationType[] = [];
+    private labelDecorationType = vscode.window.createTextEditorDecorationType({});
     private statusBarItem: vscode.StatusBarItem;
     private previousCursorLine: number | undefined;
     private pendingRenders = new Map<string, ReturnType<typeof setTimeout>>();
     private selectionListener: vscode.Disposable;
 
     constructor() {
-        // Initialize decoration types with different colors
-        for (let i = 0; i < 10; i++) {
-            this.decorationTypes.push(vscode.window.createTextEditorDecorationType({
-                color: this.getColor(i)
-            }));
-        }
-
         // Create a status bar item for cursor path
         this.statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
         this.statusBarItem.text = 'IFDEF Path: <None>';
@@ -34,12 +33,8 @@ export class IfdefDecorationProvider {
         });
     }
 
-    getColor(level: number): string {
-        const colors = [
-            'blue', 'green', 'red', 'orange', 'purple', 'cyan', 'magenta', 'brown', 'lime', 'pink'
-        ] as const;
-
-        return colors[level % colors.length] ?? colors[0];
+    private getColor(level: number): vscode.ThemeColor {
+        return new vscode.ThemeColor(`ifdefPathfinder.depth${(level % depthColorCount) + 1}Foreground`);
     }
 
     private buildDecoration(
@@ -61,24 +56,25 @@ export class IfdefDecorationProvider {
         };
     }
 
+    private isShown({ type, label, hasMatchingComment }: DirectiveLabel): boolean {
+        const { inlineHintDirectives, hideWhenEndifCommented } = getSettings();
+        const hintDirective = hintDirectiveOf(type);
+        return label !== '' && hintDirective !== undefined && inlineHintDirectives.has(hintDirective)
+            && !(hasMatchingComment && hideWhenEndifCommented);
+    }
+
     private renderDecorations(editor: vscode.TextEditor, labels: DirectiveLabel[]) {
-        const decorations: vscode.DecorationOptions[][] = this.decorationTypes.map(() => []);
-
-        for (const { endLine, label, level, hasMatchingComment } of labels) {
-            if (label && !hasMatchingComment) {
-                decorations[level % decorations.length]?.push(this.buildDecoration(editor, endLine, label, level));
-            }
-        }
-
-        decorations.forEach((levelDecorations, level) => {
-            const decorationType = this.decorationTypes[level];
-            if (decorationType) {
-                editor.setDecorations(decorationType, levelDecorations);
-            }
-        });
+        const decorations = labels
+            .filter(label => this.isShown(label))
+            .map(({ endLine, label, level }) => this.buildDecoration(editor, endLine, label, level));
+        editor.setDecorations(this.labelDecorationType, decorations);
     }
 
     private applyActivePath(path: readonly string[]) {
+        if (!getSettings().statusBarEnabled) {
+            this.statusBarItem.hide();
+            return;
+        }
         const fullPath = path.length > 0 ? path.map(part => part || '?').join('->') : '<None>';
         log.debug(DebugModule.Decorations, `IFDEF Path, activePath: ${path}, full path: ${fullPath}`);
         this.statusBarItem.text = `IFDEF Path: ${fullPath}`;
@@ -113,6 +109,19 @@ export class IfdefDecorationProvider {
         this.applyActivePath(activePathAt(checkpoints, cursorLine));
     }
 
+    /** Re-renders every visible C/C++ editor, for example after the settings change */
+    refreshAll() {
+        const active = vscode.window.activeTextEditor;
+        for (const editor of vscode.window.visibleTextEditors) {
+            if (editor !== active && supportedLanguages.includes(editor.document.languageId)) {
+                this.renderDecorations(editor, getDocumentAnalysis(editor.document).labels);
+            }
+        }
+        if (active) {
+            this.refresh(active);
+        }
+    }
+
     /**
      * Debounced refresh for text edits: a full-document scan per keystroke is too expensive on
      * large files, so coalesce bursts of edits into a single trailing render per document.
@@ -138,6 +147,6 @@ export class IfdefDecorationProvider {
         this.pendingRenders.clear();
         this.selectionListener.dispose();
         this.statusBarItem.dispose();
-        this.decorationTypes.forEach(type => type.dispose());
+        this.labelDecorationType.dispose();
     }
 }

@@ -7,7 +7,7 @@ Embark on a stellar journey with IFDEF Pathfinder, an extension so advanced it c
 
 Say goodbye to the dark ages of manual #ifdef tracking. With IFDEF Pathfinder, you'll have a trusty co-pilot illuminating your path with vibrant colors, guiding you through the most complex #ifdef terrains. Whether you're a novice space cadet or a seasoned code explorer, this extension ensures your voyage through the cosmos of conditional logic is smoother than ever.
 
-In a universe where coding can feel like navigating an asteroid field, IFDEF Pathfinder is your reliable star map, your trusty tricorder, your beacon in the vast expanse of preprocessor directives. Ready to join the ranks of elite code explorers? 
+In a universe where coding can feel like navigating an asteroid field, IFDEF Pathfinder is your reliable star map, your trusty tricorder, your beacon in the vast expanse of preprocessor directives. Ready to join the ranks of elite code explorers?
 With IFDEF Pathfinder, you'll boldly go where no coder has gone before!
 
 ### Colorize & Dynamic ifdef path
@@ -31,16 +31,30 @@ With IFDEF Pathfinder, you'll boldly go where no coder has gone before!
 
 ## Usage
 
-- Press `Ctrl+P` or `F1` to access IFDEF folding options:
-  - `IFDEFs - Collapse All in Page`
-  - `IFDEFs - Collapse All Under This Section`
-  - `IFDEFs - Expand All`
-- The status bar will show the nested `#ifdef` path.
-- Enjoy the colorful and highlighted `#ifdef` sections with clear logic indicators.
+- Press `Ctrl+Shift+P` or `F1` in a C or C++ file to access the folding commands:
+  - `IFDEF Pathfinder: Collapse All in Page`
+  - `IFDEF Pathfinder: Collapse All Under This Section`
+  - `IFDEF Pathfinder: Expand All`
+- The status bar shows the conditions in effect at the cursor.
+- `#elif`, `#else` and `#endif` lines show their condition at the end of the line.
 
 ## Configuration
 
-This extension does not require any special configuration. However, you can customize the colors used for decorations by modifying the extension settings.
+Settings are under `ifdefPathfinder` in the Settings editor:
+
+| Setting                              | Default                     | Description                                                                   |
+| ------------------------------------ | --------------------------- | ----------------------------------------------------------------------------- |
+| `inlineHints.directives`             | `["elif", "else", "endif"]` | Directives that show their condition at the end of the line.                  |
+| `inlineHints.hideWhenEndifCommented` | `true`                      | Leaves out the hint on an `#endif` whose comment already names the condition. |
+| `statusBar.enabled`                  | `true`                      | Shows the conditions in effect at the cursor in the status bar.               |
+
+Hint colors follow the theme's bracket pair colors. To change them, set `ifdefPathfinder.depth1Foreground` to `ifdefPathfinder.depth6Foreground` in `workbench.colorCustomizations`:
+
+```json
+"workbench.colorCustomizations": {
+    "ifdefPathfinder.depth1Foreground": "#569cd6"
+}
+```
 
 ## Changelog
 

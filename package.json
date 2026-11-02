@@ -15,51 +15,144 @@
   "main": "./out/extension.js",
   "files": [
     "out/extension.js",
-    "syntaxes/preprocessor.json",
     "Marketing/icon.png",
     "CHANGELOG.md",
     "LICENSE"
   ],
   "contributes": {
     "configuration": {
-      "title": "Ifdef Highlighter",
+      "title": "IFDEF Pathfinder",
       "properties": {
-        "ifdefHighlighter.showDecorations": {
+        "ifdefPathfinder.inlineHints.directives": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": [
+              "elif",
+              "else",
+              "endif"
+            ],
+            "enumDescriptions": [
+              "`#elif` and its variants show the condition under which the branch is compiled.",
+              "`#else` shows the negation of every earlier branch.",
+              "`#endif` shows the condition of the block it closes."
+            ]
+          },
+          "uniqueItems": true,
+          "default": [
+            "elif",
+            "else",
+            "endif"
+          ],
+          "markdownDescription": "Directives that show their condition at the end of the line. An empty list turns these hints off."
+        },
+        "ifdefPathfinder.inlineHints.hideWhenEndifCommented": {
           "type": "boolean",
           "default": true,
-          "description": "Toggle decorations for #ifdef sections."
+          "markdownDescription": "Leaves out the hint on an `#endif` whose comment already names the condition, such as `#endif // FOO`."
         },
-        "ifdefHighlighter.showFullPath": {
+        "ifdefPathfinder.statusBar.enabled": {
           "type": "boolean",
-          "default": false,
-          "description": "Show full path in decorations."
+          "default": true,
+          "description": "Shows the conditions in effect at the cursor in the status bar."
         }
       }
     },
-    "commands": [
+    "colors": [
       {
-        "command": "extension.collapseAllIfdefs",
-        "title": "IFDEFs - Collapse All in Page"
+        "id": "ifdefPathfinder.depth1Foreground",
+        "description": "Color of hints for blocks at nesting depth 1, 7, 13 and so on.",
+        "defaults": {
+          "dark": "editorBracketHighlight.foreground1",
+          "light": "editorBracketHighlight.foreground1",
+          "highContrast": "editorBracketHighlight.foreground1",
+          "highContrastLight": "editorBracketHighlight.foreground1"
+        }
       },
       {
-        "command": "extension.collapseIfdefsInSection",
-        "title": "IFDEFs - Collapse All Under This Section"
+        "id": "ifdefPathfinder.depth2Foreground",
+        "description": "Color of hints for blocks at nesting depth 2, 8, 14 and so on.",
+        "defaults": {
+          "dark": "editorBracketHighlight.foreground2",
+          "light": "editorBracketHighlight.foreground2",
+          "highContrast": "editorBracketHighlight.foreground2",
+          "highContrastLight": "editorBracketHighlight.foreground2"
+        }
       },
       {
-        "command": "extension.expandAll",
-        "title": "IFDEFs - Expand All"
+        "id": "ifdefPathfinder.depth3Foreground",
+        "description": "Color of hints for blocks at nesting depth 3, 9, 15 and so on.",
+        "defaults": {
+          "dark": "editorBracketHighlight.foreground3",
+          "light": "editorBracketHighlight.foreground3",
+          "highContrast": "editorBracketHighlight.foreground3",
+          "highContrastLight": "editorBracketHighlight.foreground3"
+        }
+      },
+      {
+        "id": "ifdefPathfinder.depth4Foreground",
+        "description": "Color of hints for blocks at nesting depth 4, 10, 16 and so on. Defaults to the first bracket color, because the theme's fourth bracket color is transparent unless the theme sets it.",
+        "defaults": {
+          "dark": "editorBracketHighlight.foreground1",
+          "light": "editorBracketHighlight.foreground1",
+          "highContrast": "editorBracketHighlight.foreground1",
+          "highContrastLight": "editorBracketHighlight.foreground1"
+        }
+      },
+      {
+        "id": "ifdefPathfinder.depth5Foreground",
+        "description": "Color of hints for blocks at nesting depth 5, 11, 17 and so on. Defaults to the second bracket color, because the theme's fifth bracket color is transparent unless the theme sets it.",
+        "defaults": {
+          "dark": "editorBracketHighlight.foreground2",
+          "light": "editorBracketHighlight.foreground2",
+          "highContrast": "editorBracketHighlight.foreground2",
+          "highContrastLight": "editorBracketHighlight.foreground2"
+        }
+      },
+      {
+        "id": "ifdefPathfinder.depth6Foreground",
+        "description": "Color of hints for blocks at nesting depth 6, 12, 18 and so on. Defaults to the third bracket color, because the theme's sixth bracket color is transparent unless the theme sets it.",
+        "defaults": {
+          "dark": "editorBracketHighlight.foreground3",
+          "light": "editorBracketHighlight.foreground3",
+          "highContrast": "editorBracketHighlight.foreground3",
+          "highContrastLight": "editorBracketHighlight.foreground3"
+        }
       }
     ],
-    "grammars": [
+    "commands": [
       {
-        "scopeName": "source.preprocessor.injection",
-        "path": "./syntaxes/preprocessor.json",
-        "injectTo": [
-          "source.c",
-          "source.cpp"
-        ]
+        "command": "ifdefPathfinder.foldAll",
+        "title": "Collapse All in Page",
+        "category": "IFDEF Pathfinder"
+      },
+      {
+        "command": "ifdefPathfinder.foldSection",
+        "title": "Collapse All Under This Section",
+        "category": "IFDEF Pathfinder"
+      },
+      {
+        "command": "ifdefPathfinder.unfoldAll",
+        "title": "Expand All",
+        "category": "IFDEF Pathfinder"
       }
-    ]
+    ],
+    "menus": {
+      "commandPalette": [
+        {
+          "command": "ifdefPathfinder.foldAll",
+          "when": "editorLangId == c || editorLangId == cpp"
+        },
+        {
+          "command": "ifdefPathfinder.foldSection",
+          "when": "editorLangId == c || editorLangId == cpp"
+        },
+        {
+          "command": "ifdefPathfinder.unfoldAll",
+          "when": "editorLangId == c || editorLangId == cpp"
+        }
+      ]
+    }
   },
   "scripts": {
     "vscode:prepublish": "npm run rm-out && npm run esbuild-base -- --minify",
@@ -68,7 +161,7 @@
     "compile": "tsc -p ./",
     "rm-out": "node -e \"fs.rmSync('out',{recursive:true,force:true})\"",
     "watch": "tsc -watch -p ./",
-    "lint": "eslint src syntaxes",
+    "lint": "eslint src",
     "test": "tsc -p ./ --outDir out/unit && mocha \"out/unit/test/**/*.test.js\""
   },
   "devDependencies": {

@@ -1,4 +1,5 @@
 import * as vscode from 'vscode';
+import { onDidChangeSettings } from './config';
 import { IfdefFoldingProvider } from './FoldingProvider';
 import { IfdefDecorationProvider } from './decorationProvider';
 import { findSection } from './directives';
@@ -38,17 +39,20 @@ export function activate(context: vscode.ExtensionContext) {
             if (editor) {
                 decorationProvider.refresh(editor);
             }
+        }),
+        onDidChangeSettings(() => {
+            decorationProvider.refreshAll();
         })
     );
 
     // Register command: Collapse All IFDEFs in Page
-    let disposable = vscode.commands.registerCommand('extension.collapseAllIfdefs', () => {
+    let disposable = vscode.commands.registerCommand('ifdefPathfinder.foldAll', () => {
         vscode.commands.executeCommand('editor.foldAll');
     });
     context.subscriptions.push(disposable);
 
     // Register command: Collapse All IFDEFs Under This Section
-    disposable = vscode.commands.registerCommand('extension.collapseIfdefsInSection', () => {
+    disposable = vscode.commands.registerCommand('ifdefPathfinder.foldSection', () => {
         const editor = vscode.window.activeTextEditor;
         if (editor) {
             const section = findSection(getDocumentAnalysis(editor.document).blocks, editor.selection.active.line);
@@ -61,7 +65,7 @@ export function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(disposable);
 
     // Register command: Expand All
-    disposable = vscode.commands.registerCommand('extension.expandAll', () => {
+    disposable = vscode.commands.registerCommand('ifdefPathfinder.unfoldAll', () => {
         vscode.commands.executeCommand('editor.unfoldAll');
     });
     context.subscriptions.push(disposable);

@@ -170,18 +170,30 @@ describe('labels', () => {
         );
     });
 
-    it('labels #elif with its own condition, #else with every earlier branch negated, #endif with the opener', () => {
+    it('labels branches with the condition under which they are compiled, and #endif with the opener', () => {
         assert.deepStrictEqual(
             labels('#if A', '#elif B', '#elifdef C', '#elifndef D', '#elifndef E && F', '#else', '#endif'),
-            ['#if A -> A', '#elif B -> B', '#elifdef C -> C', '#elifndef D -> !D', '#elifndef E && F -> !(E && F)',
-                '#else -> !A && !B && !C && D && E && F', '#endif -> A']
+            ['#if A -> A', '#elif B -> !A && B', '#elifdef C -> !A && !B && C', '#elifndef D -> !A && !B && !C && !D',
+                '#elifndef E && F -> !A && !B && !C && D && !(E && F)', '#else -> !A && !B && !C && D && E && F',
+                '#endif -> A']
         );
     });
 
     it('keeps an inner #endif label to its own block', () => {
         assert.deepStrictEqual(
             labels('#if A', '#if B', '#elif C', '#endif', '#endif'),
-            ['#if A -> A', '#if B -> B', '#elif C -> C', '#endif -> B', '#endif -> A']
+            ['#if A -> A', '#if B -> B', '#elif C -> !B && C', '#endif -> B', '#endif -> A']
+        );
+    });
+
+    it('shows only the own condition of an #elif in the path', () => {
+        assert.deepStrictEqual(paths('#if A', '#elif B', 'x', '#endif'), ['A', 'B', 'B', 'B']);
+    });
+
+    it('records the directive type of each label', () => {
+        assert.deepStrictEqual(
+            analyzeDirectives('#ifdef A\n#elifndef B\n#else\n#endif').labels.map(({ type }) => type),
+            ['ifdef', 'elifndef', 'else', 'endif']
         );
     });
 
@@ -277,25 +289,41 @@ describe('include guards', () => {
         '#endif // FOO_H', '',
     ];
 
-    it('finds the guard and leaves it in folding and blocks', () => {
-        const analysis = analyzeDirectives(header.join('\n'));
-        assert.deepStrictEqual([analysis.includeGuard?.openLine, analysis.includeGuard?.endLine], [3, 8]);
-        assert.strictEqual(analysis.blocks.length, 2);
-        assert.strictEqual(analysis.foldRanges.length, 2);
+    /** Whether the first opening directive was left out as an include guard */
+    function isGuarded(...lines: string[]): boolean {
+        const text = lines.join('\n');
+        const opener = parseDirectives(text).find(({ type }) => type.startsWith('if'));
+        return !analyzeDirectives(text).blocks.some(({ openLine }) => openLine === opener?.line);
+    }
+
+    it('leaves the guard out of blocks', () => {
+        const { blocks } = analyzeDirectives(header.join('\n'));
+        assert.deepStrictEqual(blocks.map(({ openLine, depth }) => [openLine, depth]), [[5, 0]]);
     });
 
-    it('leaves the guard out of labels and paths only when asked', () => {
-        const ignored = analyzeDirectives(header.join('\n'), { ignoreIncludeGuards: true });
-        assert.deepStrictEqual(ignored.labels.map(({ line, level }) => [line, level]), [[5, 0], [7, 0]]);
-        assert.deepStrictEqual(activePathAt(ignored.checkpoints, 6), ['A']);
+    it('leaves the guard out of folding and sections', () => {
+        assert.deepStrictEqual(folds(...header), [[5, 7]]);
+        assert.deepStrictEqual(sections(...header).slice(3, 9), ['none', 'none', '5-7', '5-7', '5-7', 'none']);
+    });
 
-        const kept = analyzeDirectives(header.join('\n'));
-        assert.deepStrictEqual(activePathAt(kept.checkpoints, 6), ['!FOO_H', 'A']);
+    it('leaves the guard out of labels and paths', () => {
+        const analysis = analyzeDirectives(header.join('\n'));
+        assert.deepStrictEqual(analysis.labels.map(({ line, level }) => [line, level]), [[5, 0], [7, 0]]);
+        assert.deepStrictEqual(activePathAt(analysis.checkpoints, 6), ['A']);
+    });
+
+    it('keeps an #ifndef that is not a guard in labels and paths', () => {
+        const analysis = analyzeDirectives(['#ifndef X', '#define X', 'x', '#endif', 'int y;'].join('\n'));
+        assert.deepStrictEqual(analysis.labels.map(({ line, level }) => [line, level]), [[0, 0], [3, 0]]);
+        assert.deepStrictEqual(activePathAt(analysis.checkpoints, 2), ['!X']);
     });
 
     it('accepts #if !defined(X) and blank lines before #define', () => {
-        const guard = analyzeDirectives('#if !defined(X)\n\n# define X 1\n#endif').includeGuard;
-        assert.strictEqual(guard?.openLine, 0);
+        assert.strictEqual(isGuarded('#if !defined(X)', '', '# define X 1', '#endif'), true);
+    });
+
+    it('finds the guard around nested blocks', () => {
+        assert.strictEqual(isGuarded('#ifndef X', '#define X', '#if A', '#else', '#endif', '#endif'), true);
     });
 
     const notGuards: [string, string[]][] = [
@@ -310,10 +338,11 @@ describe('include guards', () => {
         ['a compound condition', ['#if !X && Y', '#define X', '#endif']],
         ['an unclosed block', ['#ifndef X', '#define X']],
         ['a stray #endif first', ['#endif', '#ifndef X', '#define X', '#endif']],
+        ['an unclosed inner block', ['#ifndef X', '#define X', '#if A', '#endif']],
     ];
     for (const [reason, lines] of notGuards) {
         it(`does not treat a file with ${reason} as guarded`, () => {
-            assert.strictEqual(analyzeDirectives(lines.join('\n')).includeGuard, undefined);
+            assert.strictEqual(isGuarded(...lines), false);
         });
     }
 });

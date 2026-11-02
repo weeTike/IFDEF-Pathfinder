@@ -12,7 +12,7 @@ export function getDocumentAnalysis(document: vscode.TextDocument): DirectiveAna
         return cached.analysis;
     }
 
-    const analysis = analyzeDirectives(document.getText(), { ignoreIncludeGuards: true });
+    const analysis = analyzeDirectives(document.getText());
     analyses.set(document, { version: document.version, analysis });
 
     for (const { line, message } of analysis.warnings) {
