@@ -7,6 +7,7 @@ const configSection = 'ifdefPathfinder';
 export type HintDirective = 'elif' | 'else' | 'endif';
 
 export interface Settings {
+    languages: readonly string[];
     inlineHintDirectives: ReadonlySet<HintDirective>;
     hideWhenEndifCommented: boolean;
     statusBarEnabled: boolean;
@@ -17,6 +18,7 @@ let cached: Settings | undefined;
 function readSettings(): Settings {
     const config = vscode.workspace.getConfiguration(configSection);
     return {
+        languages: config.get<string[]>('languages', ['c', 'cpp']),
         inlineHintDirectives: new Set(config.get<HintDirective[]>('inlineHints.directives', ['elif', 'else', 'endif'])),
         hideWhenEndifCommented: config.get('inlineHints.hideWhenEndifCommented', true),
         statusBarEnabled: config.get('statusBar.enabled', true),
@@ -28,11 +30,20 @@ export function getSettings(): Settings {
     return cached;
 }
 
-export function onDidChangeSettings(listener: () => void): vscode.Disposable {
+export function isSupported(document: vscode.TextDocument): boolean {
+    return getSettings().languages.includes(document.languageId);
+}
+
+/** Setting name within the `ifdefPathfinder` section, such as `languages` */
+export function affectsSetting(event: vscode.ConfigurationChangeEvent, name: string): boolean {
+    return event.affectsConfiguration(`${configSection}.${name}`);
+}
+
+export function onDidChangeSettings(listener: (event: vscode.ConfigurationChangeEvent) => void): vscode.Disposable {
     return vscode.workspace.onDidChangeConfiguration(event => {
         if (event.affectsConfiguration(configSection)) {
             cached = undefined;
-            listener();
+            listener(event);
         }
     });
 }

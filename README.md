@@ -42,11 +42,12 @@ With IFDEF Pathfinder, you'll boldly go where no coder has gone before!
 
 Settings are under `ifdefPathfinder` in the Settings editor:
 
-| Setting                              | Default                     | Description                                                                   |
-| ------------------------------------ | --------------------------- | ----------------------------------------------------------------------------- |
-| `inlineHints.directives`             | `["elif", "else", "endif"]` | Directives that show their condition at the end of the line.                  |
-| `inlineHints.hideWhenEndifCommented` | `true`                      | Leaves out the hint on an `#endif` whose comment already names the condition. |
-| `statusBar.enabled`                  | `true`                      | Shows the conditions in effect at the cursor in the status bar.               |
+| Setting                              | Default                       | Description                                                                   |
+| ------------------------------------ | ----------------------------- | ----------------------------------------------------------------------------- |
+| `languages`                          | C, C++, CUDA, Objective-C/C++ | Language identifiers of the files that the extension works in.                |
+| `inlineHints.directives`             | `["elif", "else", "endif"]`   | Directives that show their condition at the end of the line.                  |
+| `inlineHints.hideWhenEndifCommented` | `true`                        | Leaves out the hint on an `#endif` whose comment already names the condition. |
+| `statusBar.enabled`                  | `true`                        | Shows the conditions in effect at the cursor in the status bar.               |
 
 Hint colors follow the theme's bracket pair colors. To change them, set `ifdefPathfinder.depth1Foreground` to `ifdefPathfinder.depth6Foreground` in `workbench.colorCustomizations`:
 

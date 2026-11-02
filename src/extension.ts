@@ -1,47 +1,39 @@
 import * as vscode from 'vscode';
-import { onDidChangeSettings } from './config';
+import { affectsSetting, getSettings, onDidChangeSettings } from './config';
 import { IfdefFoldingProvider } from './FoldingProvider';
-import { IfdefDecorationProvider } from './decorationProvider';
 import { findSection } from './directives';
 import { getDocumentAnalysis } from './documentAnalysis';
+import { EditorRenderer } from './editorRenderer';
 import { getLogger } from './log';
+
+function registerFoldingProvider(): vscode.Disposable {
+    const selector = getSettings().languages.map(language => ({ language }));
+    return vscode.languages.registerFoldingRangeProvider(selector, new IfdefFoldingProvider());
+}
+
+/** Used by `when` clauses in package.json to show commands only for supported languages */
+function updateLanguageContext() {
+    void vscode.commands.executeCommand('setContext', 'ifdefPathfinder.languages', getSettings().languages);
+}
 
 export function activate(context: vscode.ExtensionContext) {
     // Start the extension logger
     context.subscriptions.push(getLogger());
 
-    // Register our custom folding provider with higher priority
-    const ifdefFoldingProvider = new IfdefFoldingProvider();
-    context.subscriptions.push(
-        vscode.languages.registerFoldingRangeProvider(
-            [{ language: 'c' }, { language: 'cpp' }],
-            ifdefFoldingProvider
-        )
-    );
+    let foldingProvider = registerFoldingProvider();
+    updateLanguageContext();
 
-    const decorationProvider = new IfdefDecorationProvider();
-    context.subscriptions.push(decorationProvider);
-
+    const renderer = new EditorRenderer();
     context.subscriptions.push(
-        vscode.window.onDidChangeActiveTextEditor(editor => {
-            if (editor) {
-                decorationProvider.refresh(editor);
+        renderer,
+        { dispose: () => foldingProvider.dispose() },
+        onDidChangeSettings(event => {
+            if (affectsSetting(event, 'languages')) {
+                foldingProvider.dispose();
+                foldingProvider = registerFoldingProvider();
+                updateLanguageContext();
             }
-        }),
-        vscode.workspace.onDidChangeTextDocument(event => {
-            const editor = vscode.window.activeTextEditor;
-            if (event.document === editor?.document) {
-                decorationProvider.onDocumentChanged(editor);
-            }
-        }),
-        vscode.workspace.onDidOpenTextDocument(document => {
-            const editor = vscode.window.visibleTextEditors.find(e => e.document === document);
-            if (editor) {
-                decorationProvider.refresh(editor);
-            }
-        }),
-        onDidChangeSettings(() => {
-            decorationProvider.refreshAll();
+            renderer.renderAll();
         })
     );
 
@@ -69,8 +61,4 @@ export function activate(context: vscode.ExtensionContext) {
         vscode.commands.executeCommand('editor.unfoldAll');
     });
     context.subscriptions.push(disposable);
-
-    if (vscode.window.activeTextEditor) {
-        decorationProvider.refresh(vscode.window.activeTextEditor);
-    }
 }

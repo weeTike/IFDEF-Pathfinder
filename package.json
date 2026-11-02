@@ -10,7 +10,11 @@
   },
   "activationEvents": [
     "onLanguage:c",
-    "onLanguage:cpp"
+    "onLanguage:cpp",
+    "onLanguage:cuda-cpp",
+    "onLanguage:objective-c",
+    "onLanguage:objective-cpp",
+    "onStartupFinished"
   ],
   "main": "./out/extension.js",
   "files": [
@@ -23,6 +27,21 @@
     "configuration": {
       "title": "IFDEF Pathfinder",
       "properties": {
+        "ifdefPathfinder.languages": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "uniqueItems": true,
+          "default": [
+            "c",
+            "cpp",
+            "cuda-cpp",
+            "objective-c",
+            "objective-cpp"
+          ],
+          "markdownDescription": "[Language identifiers](https://code.visualstudio.com/docs/languages/identifiers) of the files that the extension works in. Other preprocessed languages, such as `glsl` or `hlsl`, can be added."
+        },
         "ifdefPathfinder.inlineHints.directives": {
           "type": "array",
           "items": {
@@ -141,15 +160,15 @@
       "commandPalette": [
         {
           "command": "ifdefPathfinder.foldAll",
-          "when": "editorLangId == c || editorLangId == cpp"
+          "when": "editorLangId in ifdefPathfinder.languages"
         },
         {
           "command": "ifdefPathfinder.foldSection",
-          "when": "editorLangId == c || editorLangId == cpp"
+          "when": "editorLangId in ifdefPathfinder.languages"
         },
         {
           "command": "ifdefPathfinder.unfoldAll",
-          "when": "editorLangId == c || editorLangId == cpp"
+          "when": "editorLangId in ifdefPathfinder.languages"
         }
       ]
     }
